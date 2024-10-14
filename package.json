@@ -1,0 +1,25 @@
+{
+  "name": "dbmanagement",
+  "version": "0.0.1",
+  "description": "Database User Role Management",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "dev": "node main.js ./data/config.csv"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/hoophq/dbmanagement.git"
+  },
+  "dependencies": {
+    "csv": "^6.3.10",
+    "node-vault": "^0.10.2",
+    "pg": "^8.13.0"
+  },
+  "author": "sandro@hoop.dev",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/hoophq/dbmanagement/issues"
+  },
+  "homepage": "https://github.com/hoophq/dbmanagement#readme"
+}

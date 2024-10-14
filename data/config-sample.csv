@@ -1,0 +1,2 @@
+action,vault_addr,vault_role_id,vault_secret_id,vault_path_prefix,security_group_id,hoop_agent_ip,db_type,db_host,db_port,db_admin_user,db_admin_password,db_identifier,business_unit,owner_email
+upsert,http://127.0.0.1:8200,,devtoken,dbsecrets/data/,,,postgres,127.0.0.1,5432,adminuser,my-super-secret-passwd,localdb,bo,john.doe@domain.tld
