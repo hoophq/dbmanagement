@@ -12,16 +12,22 @@ VAULT_DEV_ROOT_TOKEN_ID=devtoken vault server -dev -dev-listen-address=0.0.0.0:8
 
 2. Deploy a Local Postgres Server
 
-TODO
+- TODO
 
-3. Install dependencies and run
+3. Copy sample configuration csv
+
+```sh
+cp ./data/config-sample.csv ./data/config.csv
+```
+
+4. Install dependencies and run
 
 ```sh
 npm install
 npm run dev
 ```
 
-### Running as Script
+### Running as a script
 
 ```sh
 # file
