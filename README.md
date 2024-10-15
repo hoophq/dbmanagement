@@ -41,9 +41,11 @@ Roles will be provisioned using the `vault_path_prefix` in the following format:
 - `{dbname}` is the database name discovered for each database engine
 - `{role}` is the name of the role (`ro`, `rw`, `admin`)
 
-A read only will be stored in the following path of a Key Value version 2: `{mount_path}/data/{db_host}/{user_role}`
+The path of a provisioned user will be available in the following format in a Key Value version 2:
 
-Example: `dbsecrets/data/127.0.0.1/dbmng_mydbname_ro`
+- `{mount_path}/data/{db_type}/{db_host}/{user_role}`
+
+Example: `dbsecrets/data/postgres/127.0.0.1/dbmng_mydbname_ro`
 
 ### Provisioned Roles
 
