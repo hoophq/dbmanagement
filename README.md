@@ -55,7 +55,7 @@ Example: `dbsecrets/data/postgres/127.0.0.1/dbmng_mydbname_ro`
 |------------------------|------------|
 | `dbmng_{dbname}_ro`    | `SELECT`, `USAGE` on schema `public` and `LOGIN` |
 | `dbmng_{dbname}_rw`    | `INSERT`, `UPDATE`, `DELETE` |
-| `dbmng_{dbname}_admin` | `SELECT, `INSERT`, `UPDATE`, `DELETE`, `TRUNCATE`, `REFERENCES` |
+| `dbmng_{dbname}_admin` | `SELECT`, `INSERT`, `UPDATE`, `DELETE`, `TRUNCATE`, `REFERENCES` |
 
 - **MySQL**
 
