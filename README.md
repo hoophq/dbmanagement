@@ -123,7 +123,7 @@ To extend the Hoop Agent image with those dependencies, follow the steps below:
 FROM hoophq/hoopdev:1.26.1
 
 RUN npm install --global \
-    csv@6.3.10 \
+    csv-parse@5.5.6 \
     node-vault@0.10.2 \
     pg@8.13.0
 
@@ -140,7 +140,7 @@ docker push myorg/hoopagent
 3. Run your agent in your infra-structure
 
 ```sh
-HOOP_KEY= hoop start agent
+docker run --rm -it -e HOOP_KEY=<your-agent-key> myorg/hoopagent
 ```
 
 4. Configure a connection
