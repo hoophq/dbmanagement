@@ -10,13 +10,14 @@ It contain scripts to provision database roles and save them into Vault.
 
 ## Configuration
 
+The configuration file is in csv format. The sample configuration is available at [./data/config-sample.csv](./data/config-sample.csv)
 
 | configuration     | required | description |
 |-------------------|----------|-------------|
 | action            | yes      | **upsert** will replace the role. **create** checks if the user role exists in vault before creating  |
-| vault_addr*       | yes      | the URL of the Vault Server, e.g.: http://127.0.0.1:8200  |
-| vault_role_id*    | no       | the role id to use with Vault app role auth method, when this configuration is empty the secret id will be used as the vault token value |
-| vault_secret_id*  | yes      | the secret id of the Vault app role auth method, it could be also the vault token |
+| vault_addr       | yes      | the URL of the Vault Server, e.g.: http://127.0.0.1:8200  |
+| vault_role_id    | no       | the role id to use with Vault app role auth method, when this configuration is empty the secret id will be used as the vault token value |
+| vault_secret_id  | yes      | the secret id of the Vault app role auth method, it could be also the vault token |
 | vault_path_prefix | yes      | the prefix to use to store the provisioned roles |
 | security_group_id | no       | this configuration is not implemented |
 | hoop_agent_ip     | no       | this configuration is not implemented |
