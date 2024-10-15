@@ -15,9 +15,9 @@ The configuration file is in csv format. The sample configuration is available a
 | configuration     | required | description |
 |-------------------|----------|-------------|
 | action            | yes      | **upsert** will replace the role. **create** checks if the user role exists in vault before creating  |
-| vault_addr       | yes      | the URL of the Vault Server, e.g.: http://127.0.0.1:8200  |
-| vault_role_id    | no       | the role id to use with Vault app role auth method, when this configuration is empty the secret id will be used as the vault token value |
-| vault_secret_id  | yes      | the secret id of the Vault app role auth method, it could be also the vault token |
+| vault_addr        | yes      | the URL of the Vault Server, e.g.: http://127.0.0.1:8200  |
+| vault_role_id     | no       | the role id to use with Vault app role auth method, when this configuration is empty the secret id will be used as the vault token value |
+| vault_secret_id   | yes      | the secret id of the Vault app role auth method, it could be also the vault token |
 | vault_path_prefix | yes      | the prefix to use to store the provisioned roles |
 | security_group_id | no       | this configuration is not implemented |
 | hoop_agent_ip     | no       | this configuration is not implemented |
@@ -98,7 +98,7 @@ npm install
 npm run dev
 ```
 
-### Running as a script
+## Running as a script
 
 ```sh
 # file
@@ -107,6 +107,59 @@ node main.js ./data/config.csv
 node main.js <<< $(cat ./data/config.csv)
 ```
 
-## Running as a Runbook
+## Running with Hoop
 
-- TODO
+This script requires nodejs version 20+ and the following dependencies installed locally:
+
+- csv-parse: `5.5.6`
+- node-vault: `0.10.2`
+- pg: `8.13.0`
+
+To extend the Hoop Agent image with those dependencies, follow the steps below:
+
+1. Create a Dockerfile and install the dependencies via `npm`
+
+```Dockerfile
+FROM hoophq/hoopdev:1.26.1
+
+RUN npm install --global \
+    csv@6.3.10 \
+    node-vault@0.10.2 \
+    pg@8.13.0
+
+RUN curl -sL https://raw.githubusercontent.com/hoophq/dbmanagement/refs/heads/main/main.js > /app/dbmanagement.js
+```
+
+2. Build and push your image to your registry
+
+```sh
+docker build -t myorg/hoopagent .
+docker push myorg/hoopagent
+```
+
+3. Run your agent in your infra-structure
+
+```sh
+HOOP_KEY= hoop start agent
+```
+
+4. Configure a connection
+
+Create a connection in the webapp with the following attributes
+
+- Type: `Shell`
+- Command: `node /app/dbmanagement.js`
+- Environment Variables: `NODE_PATH=/usr/local/lib/node_modules/`
+
+5. Configure the csv file
+
+Copy the file [./data/config-sample.csv](./data/config-sample.csv) and replace with your current environment configuration:
+
+- Add Vault Server
+- Add Vault Token (or role id and secret id)
+- Add Prefix of the Key Value Store V2 ( e.g.: `{mount_path}/data` )
+- Add the database information (type, host, user, etc)
+
+6. Execute it
+
+Paste the contents in the Webapp console and execute it.
