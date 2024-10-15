@@ -161,6 +161,7 @@ async function newVaultClient(addr, roleID, secretID) {
     endpoint: addr,
     role_id: roleID ? roleID : "",
     secret_id: secretID,
+    token: secretID,
   };
   let vaultClient = vault(opts);
   if (opts.role_id != "") {
@@ -173,7 +174,6 @@ async function newVaultClient(addr, roleID, secretID) {
 
     opts.token = client_token;
     vaultClient = vault(opts);
-    opts.token = secretID;
   }
   let { version, initialized, sealed } = await vaultClient.health();
   console.log(
