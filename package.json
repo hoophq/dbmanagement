@@ -13,6 +13,7 @@
   },
   "dependencies": {
     "csv-parse": "^5.5.6",
+    "mysql2": "^3.11.3",
     "node-vault": "^0.10.2",
     "pg": "^8.13.0"
   },
@@ -21,5 +22,8 @@
   "bugs": {
     "url": "https://github.com/hoophq/dbmanagement/issues"
   },
-  "homepage": "https://github.com/hoophq/dbmanagement#readme"
+  "homepage": "https://github.com/hoophq/dbmanagement#readme",
+  "devDependencies": {
+    "@types/mysql": "^2.15.26"
+  }
 }

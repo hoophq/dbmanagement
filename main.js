@@ -2,10 +2,13 @@ const vault = require("node-vault");
 const csvsync = require("csv-parse/sync");
 const fs = require("node:fs");
 const crypto = require("node:crypto");
-var net = require("net");
-var pg = require("pg");
+const util = require("node:util");
+const net = require("net");
+const pg = require("pg");
+var mysql = require("mysql2");
 
 const user_prefix = "dbmng";
+const defaultConnectTimeoutMs = 7000; // 7s
 
 const postgres_roles = {
   ro: (user, password) => `
@@ -14,7 +17,17 @@ DO $$
         role_count int;
 BEGIN
     SELECT COUNT(*) INTO role_count FROM pg_roles WHERE rolname = '${user}';
-    IF role_count = 0 THEN
+    IF role_count > 0 THEN
+        REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA public FROM "${user}";
+        REVOKE ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public FROM "${user}";
+        REVOKE ALL PRIVILEGES ON ALL FUNCTIONS IN SCHEMA public FROM "${user}";
+        REVOKE USAGE ON SCHEMA public FROM "${user}";
+        DROP ROLE IF EXISTS "${user}";
+
+        CREATE ROLE "${user}" WITH LOGIN ENCRYPTED PASSWORD '${password}' NOINHERIT NOCREATEDB NOCREATEROLE NOSUPERUSER;
+        GRANT USAGE ON SCHEMA public TO "${user}";
+        GRANT SELECT ON ALL TABLES IN SCHEMA public TO "${user}";
+    ELSE
         CREATE ROLE "${user}" WITH LOGIN ENCRYPTED PASSWORD '${password}' NOINHERIT NOCREATEDB NOCREATEROLE NOSUPERUSER;
         GRANT USAGE ON SCHEMA public TO "${user}";
         GRANT SELECT ON ALL TABLES IN SCHEMA public TO "${user}";
@@ -26,7 +39,17 @@ DO $$
         role_count int;
 BEGIN
     SELECT COUNT(*) INTO role_count FROM pg_roles WHERE rolname = '${user}';
-    IF role_count = 0 THEN
+    IF role_count > 0 THEN
+        REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA public FROM "${user}";
+        REVOKE ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public FROM "${user}";
+        REVOKE ALL PRIVILEGES ON ALL FUNCTIONS IN SCHEMA public FROM "${user}";
+        REVOKE USAGE ON SCHEMA public FROM "${user}";
+        DROP ROLE IF EXISTS "${user}";
+
+        CREATE ROLE "${user}" WITH LOGIN ENCRYPTED PASSWORD '${password}' NOINHERIT NOCREATEDB NOCREATEROLE NOSUPERUSER;
+        GRANT USAGE ON SCHEMA public TO "${user}";
+        GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO "${user}";
+    ELSE
         CREATE ROLE "${user}" WITH LOGIN ENCRYPTED PASSWORD '${password}' NOINHERIT NOCREATEDB NOCREATEROLE NOSUPERUSER;
         GRANT USAGE ON SCHEMA public TO "${user}";
         GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO "${user}";
@@ -38,12 +61,33 @@ DO $$
         role_count int;
 BEGIN
     SELECT COUNT(*) INTO role_count FROM pg_roles WHERE rolname = '${user}';
-    IF role_count = 0 THEN
+    IF role_count > 0 THEN
+        REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA public FROM "${user}";
+        REVOKE ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public FROM "${user}";
+        REVOKE ALL PRIVILEGES ON ALL FUNCTIONS IN SCHEMA public FROM "${user}";
+        REVOKE USAGE ON SCHEMA public FROM "${user}";
+        DROP ROLE IF EXISTS "${user}";
+
+        CREATE ROLE "${user}" WITH LOGIN ENCRYPTED PASSWORD '${password}' NOINHERIT NOCREATEDB NOCREATEROLE NOSUPERUSER;
+        GRANT USAGE ON SCHEMA public TO "${user}";
+        GRANT SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON ALL TABLES IN SCHEMA public TO "${user}";
+    ELSE
         CREATE ROLE "${user}" WITH LOGIN ENCRYPTED PASSWORD '${password}' NOINHERIT NOCREATEDB NOCREATEROLE NOSUPERUSER;
         GRANT USAGE ON SCHEMA public TO "${user}";
         GRANT SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON ALL TABLES IN SCHEMA public TO "${user}";
     END IF;
 END$$;`,
+};
+
+const mysql_roles = {
+  ro: (user, password) => `
+START TRANSACTION;
+CREATE USER '${user}'@'%' IDENTIFIED BY '${password}';
+GRANT SELECT ON database_name.* TO '${user}'@'%';
+COMMIT;
+  `,
+  rw: (user, password) => `SELECT NOW()`,
+  admin: (user, password) => `SELECT NOW()`,
 };
 
 function checkLiveness(host, port) {
@@ -59,32 +103,68 @@ function checkLiveness(host, port) {
   });
 }
 
-async function fetchPGDatabases(host, port, user, password) {
-  const pgclient = new pg.Client({
-    ssl: false,
-    host: host,
-    port: port,
-    user: user,
-    password: password,
-    database: "postgres",
-    application_name: "dbmng",
-    connectionTimeoutMillis: 10000, // 10s
-  });
-
-  await pgclient.connect();
-  let res = await pgclient.query(
-    "SELECT datname as dbname FROM pg_database WHERE datname NOT IN ('postgres', 'template0', 'template1', 'rdsadmin')",
-  );
-
-  await pgclient.end();
-  if (res.rowCount == 0) {
-    return [];
-  }
+async function fetchDatabases(dbType, host, port, user, password) {
   const dbItems = [];
-  for (row of res.rows) {
-    dbItems.push(row.dbname);
+  try {
+    switch (dbType) {
+      case "postgres":
+        const pgclient = new pg.Client({
+          ssl: false,
+          host: host,
+          port: port,
+          user: user,
+          password: password,
+          database: "postgres",
+          application_name: "dbmng",
+          connectionTimeoutMillis: 10000, // 10s
+        });
+
+        await pgclient.connect();
+        let res = await pgclient.query(`
+          SELECT datname as dbname
+          FROM pg_database
+          WHERE datname NOT IN ('postgres', 'template0', 'template1', 'rdsadmin')`);
+        await pgclient.end();
+
+        if (res.rowCount == 0) {
+          break;
+        }
+
+        for (row of res.rows) {
+          dbItems.push(row.dbname);
+        }
+        break;
+      case "mysql":
+        const conn = mysql.createConnection({
+          host: host,
+          user: user,
+          password: password,
+          database: "mysql",
+          connectTimeout: defaultConnectTimeoutMs,
+        });
+
+        conn.connect();
+        const queryFn = util.promisify(conn.query).bind(conn);
+        const rows = await queryFn(`
+          SELECT schema_name as dbname
+          FROM information_schema.schemata
+          WHERE schema_name NOT IN ('information_schema', 'performance_schema', 'sys', 'mysql')`);
+        conn.end();
+
+        for (row of rows) {
+          dbItems.push(row.dbname);
+        }
+        break;
+      case "mongodb":
+        break;
+      default:
+        console.warn(`db type ${dbType} not implemeted`);
+        return;
+    }
+  } catch (ex) {
+    return { items: [], err: ex };
   }
-  return dbItems;
+  return { items: dbItems, err: null };
 }
 
 async function getVaultSecret(vaultClient, path) {
@@ -175,7 +255,8 @@ async function newVaultClient(addr, roleID, secretID) {
     opts.token = client_token;
     vaultClient = vault(opts);
   }
-  let { version, initialized, sealed } = await vaultClient.health();
+  const options = { requestOptions: { timeout: defaultConnectTimeoutMs } };
+  let { version, initialized, sealed } = await vaultClient.health(options);
   console.log(
     `--> Vault connected at ${addr}, version=${version}, initialized=${initialized}, sealed=${sealed}`,
   );
@@ -241,6 +322,10 @@ function generateRandomPassword() {
     );
 
     for (obj of dbinstances) {
+      if (obj.db_type != "postgres") {
+        console.log(`database type ${obj.db_type} not implemented`);
+        continue;
+      }
       if (obj.action != "create" && obj.action != "upsert") {
         console.log(
           `skip record, unknown action ${obj.action}, accept=[create, upsert]`,
@@ -259,15 +344,22 @@ function generateRandomPassword() {
         `--> database ${obj.db_type} ready at ${obj.db_host}:${obj.db_port}`,
       );
 
-      const dbList = await fetchPGDatabases(
+      const dbResult = await fetchDatabases(
+        obj.db_type,
         obj.db_host,
         obj.db_port,
         obj.db_admin_user,
         obj.db_admin_password,
       );
+      if (dbResult?.err != null) {
+        console.error(
+          `${obj.db_type}/${obj.db_host}: failed obtaining databases, err=${dbResult.err.message}, ${JSON.stringify(dbResult.err)}`,
+        );
+        continue;
+      }
 
       const output = outputFromCsvEntry(obj);
-      for (const dbname of dbList) {
+      for (const dbname of dbResult.items) {
         output[dbname] = {};
         const pgclient = new pg.Client({
           ssl: false,
@@ -277,7 +369,7 @@ function generateRandomPassword() {
           host: obj.db_host,
           database: dbname,
           application_name: "dbmng",
-          connectionTimeoutMillis: 10000, // 10s
+          connectionTimeoutMillis: defaultConnectTimeoutMs,
         });
         await pgclient.connect();
         console.log(
@@ -309,10 +401,9 @@ function generateRandomPassword() {
             continue;
           }
 
-          // TODO: change to random password
           const randomPasswd = generateRandomPassword();
           const roleQuery = postgres_roles[role](userRole, randomPasswd);
-          ({ payload, err } = await doPgQuery(pgclient, roleQuery));
+          ({ err } = await doPgQuery(pgclient, roleQuery));
           if (err != null) {
             output[dbname][role].status = "pg:query-error";
             console.log(
