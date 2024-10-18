@@ -7,87 +7,76 @@ const net = require("net");
 const pg = require("pg");
 var mysql = require("mysql2");
 
-const user_prefix = "dbmng";
+const user_prefix = "dbmng_hoop";
 const defaultConnectTimeoutMs = 7000; // 7s
+const roRole = "ro";
+const rwRole = "rw";
+const adminRole = "admin";
+const roleList = [roRole, rwRole, adminRole];
 
 const postgres_roles = {
-  ro: (user, password) => `
+  [roRole]: (o) => {
+    o.privileges = "SELECT";
+    return `
 DO $$
-    DECLARE
-        role_count int;
+  DECLARE
+    role_count int;
+    db_schema_name text;
 BEGIN
-    SELECT COUNT(*) INTO role_count FROM pg_roles WHERE rolname = '${user}';
-    IF role_count > 0 THEN
-        REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA public FROM "${user}";
-        REVOKE ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public FROM "${user}";
-        REVOKE ALL PRIVILEGES ON ALL FUNCTIONS IN SCHEMA public FROM "${user}";
-        REVOKE USAGE ON SCHEMA public FROM "${user}";
-        DROP ROLE IF EXISTS "${user}";
+  -- create role or alter the password
+  SELECT COUNT(*) INTO role_count FROM pg_roles WHERE rolname = '${o.user}';
+  IF role_count > 0 THEN
+    ALTER ROLE "${o.user}" WITH LOGIN ENCRYPTED PASSWORD '${o.password}';
+  ELSE
+    CREATE ROLE "${o.user}" WITH LOGIN ENCRYPTED PASSWORD '${o.password}' NOINHERIT NOCREATEDB NOCREATEROLE NOSUPERUSER;
+  END IF;
 
-        CREATE ROLE "${user}" WITH LOGIN ENCRYPTED PASSWORD '${password}' NOINHERIT NOCREATEDB NOCREATEROLE NOSUPERUSER;
-        GRANT USAGE ON SCHEMA public TO "${user}";
-        GRANT SELECT ON ALL TABLES IN SCHEMA public TO "${user}";
-    ELSE
-        CREATE ROLE "${user}" WITH LOGIN ENCRYPTED PASSWORD '${password}' NOINHERIT NOCREATEDB NOCREATEROLE NOSUPERUSER;
-        GRANT USAGE ON SCHEMA public TO "${user}";
-        GRANT SELECT ON ALL TABLES IN SCHEMA public TO "${user}";
-    END IF;
-END$$;`,
-  rw: (user, password) => `
-DO $$
-    DECLARE
-        role_count int;
-BEGIN
-    SELECT COUNT(*) INTO role_count FROM pg_roles WHERE rolname = '${user}';
-    IF role_count > 0 THEN
-        REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA public FROM "${user}";
-        REVOKE ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public FROM "${user}";
-        REVOKE ALL PRIVILEGES ON ALL FUNCTIONS IN SCHEMA public FROM "${user}";
-        REVOKE USAGE ON SCHEMA public FROM "${user}";
-        DROP ROLE IF EXISTS "${user}";
-
-        CREATE ROLE "${user}" WITH LOGIN ENCRYPTED PASSWORD '${password}' NOINHERIT NOCREATEDB NOCREATEROLE NOSUPERUSER;
-        GRANT USAGE ON SCHEMA public TO "${user}";
-        GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO "${user}";
-    ELSE
-        CREATE ROLE "${user}" WITH LOGIN ENCRYPTED PASSWORD '${password}' NOINHERIT NOCREATEDB NOCREATEROLE NOSUPERUSER;
-        GRANT USAGE ON SCHEMA public TO "${user}";
-        GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO "${user}";
-    END IF;
-END$$;`,
-  admin: (user, password) => `
-DO $$
-    DECLARE
-        role_count int;
-BEGIN
-    SELECT COUNT(*) INTO role_count FROM pg_roles WHERE rolname = '${user}';
-    IF role_count > 0 THEN
-        REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA public FROM "${user}";
-        REVOKE ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public FROM "${user}";
-        REVOKE ALL PRIVILEGES ON ALL FUNCTIONS IN SCHEMA public FROM "${user}";
-        REVOKE USAGE ON SCHEMA public FROM "${user}";
-        DROP ROLE IF EXISTS "${user}";
-
-        CREATE ROLE "${user}" WITH LOGIN ENCRYPTED PASSWORD '${password}' NOINHERIT NOCREATEDB NOCREATEROLE NOSUPERUSER;
-        GRANT USAGE ON SCHEMA public TO "${user}";
-        GRANT SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON ALL TABLES IN SCHEMA public TO "${user}";
-    ELSE
-        CREATE ROLE "${user}" WITH LOGIN ENCRYPTED PASSWORD '${password}' NOINHERIT NOCREATEDB NOCREATEROLE NOSUPERUSER;
-        GRANT USAGE ON SCHEMA public TO "${user}";
-        GRANT SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON ALL TABLES IN SCHEMA public TO "${user}";
-    END IF;
-END$$;`,
+  -- grant the privileges to the new or existing role for all schemas
+  FOR db_schema_name IN
+    SELECT schema_name
+    FROM information_schema.schemata
+    WHERE schema_name NOT IN ('information_schema', 'pg_catalog', 'pg_toast')
+  LOOP
+    EXECUTE 'GRANT USAGE ON SCHEMA ' || db_schema_name || ' TO "${o.user}"';
+    EXECUTE 'GRANT ${o.privileges} ON ALL TABLES IN SCHEMA ' || db_schema_name || ' TO "${o.user}"';
+  END LOOP;
+END$$;`;
+  },
+  [rwRole]: (o) => {
+    o.privileges = "SELECT, INSERT, UPDATE, DELETE";
+    return postgres_roles[roRole](o);
+  },
+  [adminRole]: (o) => {
+    o.privileges =
+      "SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER";
+    return postgres_roles[roRole](o);
+  },
 };
 
 const mysql_roles = {
-  ro: (user, password) => `
+  [roRole]: (o) => `
 START TRANSACTION;
-CREATE USER '${user}'@'%' IDENTIFIED BY '${password}';
-GRANT SELECT ON database_name.* TO '${user}'@'%';
+DROP USER IF EXISTS '${o.user}';
+CREATE USER '${o.user}'@'%' IDENTIFIED BY '${o.password}';
+GRANT SELECT ON *.* TO '${o.user}'@'%';
+FLUSH PRIVILEGES;
+COMMIT;`,
+  [rwRole]: (o) => `
+START TRANSACTION;
+DROP USER IF EXISTS '${o.user}';
+CREATE USER '${o.user}'@'%' IDENTIFIED BY '${o.password}';
+GRANT SELECT, DELETE, UPDATE, INSERT ON *.* TO '${o.user}'@'%';
+FLUSH PRIVILEGES;
 COMMIT;
   `,
-  rw: (user, password) => `SELECT NOW()`,
-  admin: (user, password) => `SELECT NOW()`,
+  [adminRole]: (o) => `
+START TRANSACTION;
+DROP USER IF EXISTS '${o.user}';
+CREATE USER '${o.user}'@'%' IDENTIFIED BY '${o.password}';
+GRANT SELECT, DELETE, UPDATE, INSERT, ALTER, CREATE, DROP ON *.* TO '${o.user}'@'%';
+FLUSH PRIVILEGES;
+COMMIT;
+  `,
 };
 
 function checkLiveness(host, port) {
@@ -103,63 +92,42 @@ function checkLiveness(host, port) {
   });
 }
 
-async function fetchDatabases(dbType, host, port, user, password) {
+async function fetchPgDatabases(host, port, user, password) {
   const dbItems = [];
   try {
-    switch (dbType) {
-      case "postgres":
-        const pgclient = new pg.Client({
-          ssl: false,
-          host: host,
-          port: port,
-          user: user,
-          password: password,
-          database: "postgres",
-          application_name: "dbmng",
-          connectionTimeoutMillis: 10000, // 10s
-        });
+    const pgClient = new pg.Client({
+      ssl: false,
+      host: host,
+      port: port,
+      user: user,
+      password: password,
+      database: "postgres",
+      application_name: user_prefix,
+      connectionTimeoutMillis: defaultConnectTimeoutMs,
+    });
 
-        await pgclient.connect();
-        let res = await pgclient.query(`
-          SELECT datname as dbname
-          FROM pg_database
-          WHERE datname NOT IN ('postgres', 'template0', 'template1', 'rdsadmin')`);
-        await pgclient.end();
+    // it could blow up with uncaught exception
+    // https://github.com/brianc/node-postgres/issues/1927
+    await pgClient.connect();
+    const res = await pgClient
+      .query(
+        `
+      SELECT datname as dbname
+      FROM pg_database
+      WHERE datname NOT IN ('template0', 'template1', 'rdsadmin')`,
+      )
+      .catch((ex) => {
+        pgClient.end();
+        throw ex;
+      });
+    await pgClient.end();
 
-        if (res.rowCount == 0) {
-          break;
-        }
+    if (res.rowCount == 0) {
+      return { items: [], err: null };
+    }
 
-        for (row of res.rows) {
-          dbItems.push(row.dbname);
-        }
-        break;
-      case "mysql":
-        const conn = mysql.createConnection({
-          host: host,
-          user: user,
-          password: password,
-          database: "mysql",
-          connectTimeout: defaultConnectTimeoutMs,
-        });
-
-        conn.connect();
-        const queryFn = util.promisify(conn.query).bind(conn);
-        const rows = await queryFn(`
-          SELECT schema_name as dbname
-          FROM information_schema.schemata
-          WHERE schema_name NOT IN ('information_schema', 'performance_schema', 'sys', 'mysql')`);
-        conn.end();
-
-        for (row of rows) {
-          dbItems.push(row.dbname);
-        }
-        break;
-      case "mongodb":
-        break;
-      default:
-        console.warn(`db type ${dbType} not implemeted`);
-        return;
+    for (row of res.rows) {
+      dbItems.push(row.dbname);
     }
   } catch (ex) {
     return { items: [], err: ex };
@@ -204,7 +172,7 @@ async function getVaultSecret(vaultClient, path) {
 
 async function putVaultSecret(vaultClient, path, data) {
   return new Promise((resolve, _) => {
-    const res = vaultClient
+    vaultClient
       .write(
         path,
         {
@@ -263,45 +231,98 @@ async function newVaultClient(addr, roleID, secretID) {
   return vaultClient;
 }
 
-async function doPgQuery(pgClient, query) {
-  return new Promise((resolve, _) => {
-    pgClient
-      .query(query)
-      .then((res) => resolve({ payload: res, err: null }))
-      .catch((ex) => resolve({ payload: null, err: ex }));
-  });
-}
-
-function outputFromCsvEntry(entry) {
-  return {
-    action: entry.action,
-    deleted: false,
-    application_name: "Hoop",
-    bu: entry.business_unit,
-    vault_keys: {},
-    engine: entry.db_type,
-    approvers: {
-      owner: entry.owner_email,
-      cto: entry.cto_email,
-    },
-  };
+async function provisionRoles(csv, roleName, password) {
+  const userRole = `${user_prefix}_${roleName}`;
+  const dbEntry = `${csv.db_type}/${csv.db_host}`;
+  let query = null;
+  try {
+    switch (csv.db_type) {
+      case "postgres":
+        const dbResult = await fetchPgDatabases(
+          csv.db_host,
+          csv.db_port,
+          csv.db_admin_user,
+          csv.db_admin_password,
+        );
+        if (dbResult?.err != null) {
+          return new Promise((resolve, _) =>
+            resolve(
+              `${dbEntry} - failed obtaining postgres databases, err=${dbResult.err.message}, ${JSON.stringify(dbResult.err)}`,
+            ),
+          );
+        }
+        query = postgres_roles[roleName]({
+          user: userRole,
+          password: password,
+        });
+        console.log(
+          `${dbEntry} - start provisioning roles and privileges, databases=(${dbResult.items.length}), ${dbResult.items}`,
+        );
+        for (dbname of dbResult.items) {
+          const pgClient = new pg.Client({
+            ssl: false,
+            host: csv.db_host,
+            port: csv.db_port,
+            user: csv.db_admin_user,
+            password: csv.db_admin_password,
+            database: dbname,
+            application_name: user_prefix,
+            connectionTimeoutMillis: defaultConnectTimeoutMs,
+          });
+          // it could blow up with uncaught exception
+          // https://github.com/brianc/node-postgres/issues/1927
+          await pgClient.connect();
+          _ = await pgClient.query(query).catch((ex) => {
+            pgClient.end();
+            throw ex;
+          });
+          await pgClient.end();
+          return new Promise((resolve, _) => resolve(null));
+        }
+      case "mysql":
+        console.log(`${dbEntry} - start provisioning roles and privileges`);
+        query = mysql_roles[roleName]({ user: userRole, password: password });
+        const conn = mysql.createConnection({
+          host: csv.db_host,
+          port: csv.db_port,
+          user: csv.db_admin_user,
+          password: csv.db_admin_password,
+          database: "mysql",
+          connectTimeout: defaultConnectTimeoutMs,
+          multipleStatements: true,
+        });
+        conn.connect();
+        const queryFn = util.promisify(conn.query).bind(conn);
+        _ = await queryFn(query).catch((ex) => {
+          conn.end();
+          throw ex;
+        });
+        conn.end();
+        return new Promise((resolve, _) => resolve(null));
+      default:
+        return new Promise((resolve, _) =>
+          resolve(`database type ${csv.db_type} not implemented`),
+        );
+    }
+  } catch (ex) {
+    return new Promise((resolve, _) => resolve(ex));
+  }
 }
 
 function generateRandomPassword() {
-  characters =
-    "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz-_";
+  characters = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
   return Array.from(crypto.webcrypto.getRandomValues(new Uint32Array(30)))
     .map((x) => characters[x % characters.length])
     .join("");
 }
 
 (async () => {
+  const output = [];
   try {
     let csvFile = 0;
     if (process.argv.length > 2) {
       csvFile = process.argv[2];
     }
-    // const csvFile = process.argv[2];
     const csvData = fs.readFileSync(csvFile);
     const dbinstances = csvsync.parse(csvData, {
       columns: true,
@@ -321,117 +342,81 @@ function generateRandomPassword() {
       csvItem.vault_secret_id,
     );
 
-    for (obj of dbinstances) {
-      if (obj.db_type != "postgres") {
-        console.log(`database type ${obj.db_type} not implemented`);
-        continue;
-      }
-      if (obj.action != "create" && obj.action != "upsert") {
+    for (const [i, csv] of dbinstances.entries()) {
+      const dbEntry = `${csv.db_type}/${csv.db_host}`;
+      output[i] = { record: dbEntry, status: "initial" };
+      console.log(`--> ${dbEntry} - starting provisioning roles`);
+
+      if (csv.action != "create" && csv.action != "upsert") {
+        output[i].status = "skip:unknown-action";
         console.log(
-          `skip record, unknown action ${obj.action}, accept=[create, upsert]`,
+          `${dbEntry} - skip record, unknown action: ${csv.action}, accept=[create, upsert]`,
         );
         continue;
       }
-      const err = await checkLiveness(obj.db_host, obj.db_port);
+      const err = await checkLiveness(csv.db_host, csv.db_port);
       // skip databases that failed to connect
       if (err) {
         console.log(
-          `${obj.db_type} not ready at ${obj.db_host}:${obj.db_port}, reason=${err}`,
+          `${dbEntry} - not ready at port ${csv.db_port}, reason=${err}`,
         );
+        output[i].status = "db:liveness-failed";
         continue;
       }
-      console.log(
-        `--> database ${obj.db_type} ready at ${obj.db_host}:${obj.db_port}`,
-      );
+      console.log(`${dbEntry} - database ready at port ${csv.db_port}`);
+      for (role of roleList) {
+        const userRole = `${user_prefix}_${role}`;
+        const vaultPath = `${csv.vault_path_prefix}${csv.db_type}/${csv.db_host}/${userRole}`;
+        let { payload, err } = await getVaultSecret(vaultClient, vaultPath);
 
-      const dbResult = await fetchDatabases(
-        obj.db_type,
-        obj.db_host,
-        obj.db_port,
-        obj.db_admin_user,
-        obj.db_admin_password,
-      );
-      if (dbResult?.err != null) {
-        console.error(
-          `${obj.db_type}/${obj.db_host}: failed obtaining databases, err=${dbResult.err.message}, ${JSON.stringify(dbResult.err)}`,
-        );
-        continue;
-      }
-
-      const output = outputFromCsvEntry(obj);
-      for (const dbname of dbResult.items) {
-        output[dbname] = {};
-        const pgclient = new pg.Client({
-          ssl: false,
-          user: obj.db_admin_user,
-          password: obj.db_admin_password,
-          port: obj.db_port,
-          host: obj.db_host,
-          database: dbname,
-          application_name: "dbmng",
-          connectionTimeoutMillis: defaultConnectTimeoutMs,
-        });
-        await pgclient.connect();
         console.log(
-          `--> provisioning default roles=${Object.keys(postgres_roles)}, db=${dbname}, host=${obj.db_host}`,
+          `${dbEntry} - vault: fetch secret, path=${vaultPath}, request_id=${payload.requestID}, version=${payload.version}, destroyed=${payload.destroyed}, err=${JSON.stringify(err)}`,
         );
-
-        for (role of ["ro", "rw", "admin"]) {
-          const userRole = `${user_prefix}_${dbname}_${role}`;
-          console.log(`--> provisioning role ${userRole}`);
-
-          const vaultPath = `${obj.vault_path_prefix}${obj.db_type}/${obj.db_host}/${userRole}`;
-          let { payload, err } = await getVaultSecret(vaultClient, vaultPath);
-          // let { payload, err } = res;
-
-          console.log(
-            `vault: fetch secret, path=${vaultPath}, request_id=${payload.requestID}, version=${payload.version}, destroyed=${payload.destroyed}, err=${JSON.stringify(err)}`,
-          );
-          // action create will not proceed if the secret already exists in Vault
-          if (obj.action == "create" && err == null) {
-            continue;
-          }
-          output[dbname][role] = {
-            user: userRole,
-            status: "initial",
-          };
-          // skip it for non 404 errors
-          if (err?.statusCode > 0 && err?.statusCode != 404) {
-            output[dbname][role].status = "vault:fetch-failure";
-            continue;
-          }
-
-          const randomPasswd = generateRandomPassword();
-          const roleQuery = postgres_roles[role](userRole, randomPasswd);
-          ({ err } = await doPgQuery(pgclient, roleQuery));
-          if (err != null) {
-            output[dbname][role].status = "pg:query-error";
-            console.log(
-              `pg: query error, message=${err.message}, err=${JSON.stringify(err)}`,
-            );
-            continue;
-          }
-
-          ({ payload, err } = await putVaultSecret(vaultClient, vaultPath, {
-            HOST: obj.db_host,
-            PORT: obj.db_port,
-            USER: userRole,
-            PASSWORD: randomPasswd,
-          }));
-          output[dbname][role].status =
-            err == null ? "success" : "vault:write-failure";
-
-          console.log(
-            `vault: write secret, path=${vaultPath}, request_id=${payload.requestID}, err=${JSON.stringify(err)}`,
-          );
+        // action create will not proceed if the secret already exists in Vault
+        if (csv.action == "create" && err == null) {
+          output[i].status = "skip:vault-key-exists";
+          continue;
         }
-        _ = await pgclient.end();
+
+        output[i].user = userRole;
+        output[i].vault_path = vaultPath;
+        // skip it for non 404 errors
+        if (err?.statusCode > 0 && err?.statusCode != 404) {
+          output[i].status = "vault:fetch-failure";
+          continue;
+        }
+
+        const randomPasswd = generateRandomPassword();
+        // const roleQuery = postgres_roles[role](userRole, randomPasswd);
+        err = await provisionRoles(csv, role, randomPasswd);
+        if (err != null) {
+          output[i].status = "db:query-error";
+          console.log(
+            `${dbEntry} - query error, message=${err.message}, err=${JSON.stringify(err)}`,
+          );
+          continue;
+        }
+
+        ({ payload, err } = await putVaultSecret(vaultClient, vaultPath, {
+          HOST: csv.db_host,
+          PORT: csv.db_port,
+          USER: userRole,
+          PASSWORD: randomPasswd,
+        }));
+        output[i].status = err == null ? "success" : "vault:write-failure";
+
+        console.log(
+          `${dbEntry} - vault: write secret, path=${vaultPath}, request_id=${payload.requestID}, err=${JSON.stringify(err)}`,
+        );
       }
-      console.log("--> output");
-      console.log(JSON.stringify(output, null, 2));
     }
   } catch (e) {
+    console.log("\n--> output");
+    console.log(JSON.stringify(output, null, 2));
+
     console.trace(e.stack || e);
     process.exit(1);
   }
+  console.log("\n--> output");
+  console.log(JSON.stringify(output, null, 2));
 })();

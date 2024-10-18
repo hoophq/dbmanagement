@@ -5,7 +5,7 @@ It contain scripts to provision database roles and save them into Vault.
 ## Supported Databases
 
 - [x] Postgres
-- [ ] MySQL
+- [x] MySQL
 - [ ] MongoDB
 
 ## Configuration
@@ -36,7 +36,7 @@ The configuration file is in csv format. The sample configuration is available a
 The `vault_addr`, `vault_role_id` and `vault_secret_id` attributes are used only in the first entry to configure Vault.
 The onwards entries could be left as empty.
 
-Roles will be provisioned using the `vault_path_prefix` in the following format: `dbmng_{dbname}_{role}`.
+Roles will be provisioned using the `vault_path_prefix` in the following format: `dbmng_hoop_{role}`.
 
 - `{dbname}` is the database name discovered for each database engine
 - `{role}` is the name of the role (`ro`, `rw`, `admin`)
@@ -53,25 +53,25 @@ Example: `dbsecrets/data/postgres/127.0.0.1/dbmng_mydbname_ro`
 
 | role                   | privileges |
 |------------------------|------------|
-| `dbmng_{dbname}_ro`    | `SELECT`, `USAGE` on schema `public` and `LOGIN` |
-| `dbmng_{dbname}_rw`    | `INSERT`, `UPDATE`, `DELETE` |
-| `dbmng_{dbname}_admin` | `SELECT`, `INSERT`, `UPDATE`, `DELETE`, `TRUNCATE`, `REFERENCES` |
+| `dbmng_hoop_ro`        | `SELECT`, `USAGE` on schema `public` and `LOGIN` |
+| `dbmng_hoop_rw`        | `SELECT`, `INSERT`, `UPDATE`, `DELETE` |
+| `dbmng_hoop_admin`     | `SELECT`, `INSERT`, `UPDATE`, `DELETE`, `TRUNCATE`, `REFERENCES` |
 
 - **MySQL**
 
 | role                   | privileges |
 |------------------------|------------|
-| `dbmng_{dbname}_ro`    | Not Implemented |
-| `dbmng_{dbname}_rw`    | Not Implemented |
-| `dbmng_{dbname}_admin` | Not Implemented |
+| `dbmng_hoop_ro`        | `SELECT` |
+| `dbmng_hoop_rw`        | `SELECT`, `INSERT`, `UPDATE`, `DELETE` |
+| `dbmng_hoop_admin`     | `SELECT`, `INSERT`, `UPDATE`, `DELETE`, `TRUNCATE`, `REFERENCES`, `TRIGGER` |
 
 - **MongoDB**
 
 | role                   | privileges |
 |------------------------|------------|
-| `dbmng_{dbname}_ro`    | Not Implemented |
-| `dbmng_{dbname}_rw`    | Not Implemented |
-| `dbmng_{dbname}_admin` | Not Implemented |
+| `dbmng_hoop_ro`    | Not Implemented |
+| `dbmng_hoop_rw`    | Not Implemented |
+| `dbmng_hoop_admin` | Not Implemented |
 
 ## Development
 
@@ -81,7 +81,7 @@ Example: `dbsecrets/data/postgres/127.0.0.1/dbmng_mydbname_ro`
 VAULT_DEV_ROOT_TOKEN_ID=devtoken vault server -dev -dev-listen-address=0.0.0.0:8200
 ```
 
-2. Deploy a Local Postgres Server
+2. Deploy a Local Postgres / MySQL Server
 
 - TODO
 
@@ -100,6 +100,11 @@ npm run dev
 
 ## Running as a script
 
+Make sure to be able to reach via network the following services:
+
+- Vault Server
+- Database (MySQL, Postgres and MongoDB)
+
 ```sh
 # file
 node main.js ./data/config.csv
@@ -114,6 +119,7 @@ This script requires nodejs version 20+ and the following dependencies installed
 - csv-parse: `5.5.6`
 - node-vault: `0.10.2`
 - pg: `8.13.0`
+- mysql2: `3.11.3`
 
 To extend the Hoop Agent image with those dependencies, follow the steps below:
 
@@ -125,7 +131,8 @@ FROM hoophq/hoopdev:1.26.1
 RUN npm install --global \
     csv-parse@5.5.6 \
     node-vault@0.10.2 \
-    pg@8.13.0
+    pg@8.13.0 \
+    mysql2@3.11.3
 
 RUN curl -sL https://raw.githubusercontent.com/hoophq/dbmanagement/refs/heads/main/main.js > /app/dbmanagement.js
 ```
