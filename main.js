@@ -3,9 +3,10 @@ const csvsync = require("csv-parse/sync");
 const fs = require("node:fs");
 const crypto = require("node:crypto");
 const util = require("node:util");
+const urllib = require("urllib");
 const net = require("net");
 const pg = require("pg");
-var mysql = require("mysql2");
+const mysql = require("mysql2");
 
 const user_prefix = "dbmng_hoop";
 const defaultConnectTimeoutMs = 7000; // 7s
@@ -14,7 +15,10 @@ const rwRole = "rw";
 const adminRole = "admin";
 const roleList = [roRole, rwRole, adminRole];
 
-const postgres_roles = {
+const baseAtlasAPIUrl = "https://cloud.mongodb.com/api/atlas/v2";
+const { ATLAS_USER, ATLAS_USER_KEY } = process.env;
+
+const postgresRoles = {
   [roRole]: (o) => {
     o.privileges = "SELECT";
     return `
@@ -44,16 +48,16 @@ END$$;`;
   },
   [rwRole]: (o) => {
     o.privileges = "SELECT, INSERT, UPDATE, DELETE";
-    return postgres_roles[roRole](o);
+    return postgresRoles[roRole](o);
   },
   [adminRole]: (o) => {
     o.privileges =
       "SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER";
-    return postgres_roles[roRole](o);
+    return postgresRoles[roRole](o);
   },
 };
 
-const mysql_roles = {
+const mysqlRoles = {
   [roRole]: (o) => `
 START TRANSACTION;
 DROP USER IF EXISTS '${o.user}';
@@ -67,20 +71,120 @@ DROP USER IF EXISTS '${o.user}';
 CREATE USER '${o.user}'@'%' IDENTIFIED BY '${o.password}';
 GRANT SELECT, DELETE, UPDATE, INSERT ON *.* TO '${o.user}'@'%';
 FLUSH PRIVILEGES;
-COMMIT;
-  `,
+COMMIT;`,
   [adminRole]: (o) => `
 START TRANSACTION;
 DROP USER IF EXISTS '${o.user}';
 CREATE USER '${o.user}'@'%' IDENTIFIED BY '${o.password}';
 GRANT SELECT, DELETE, UPDATE, INSERT, ALTER, CREATE, DROP ON *.* TO '${o.user}'@'%';
 FLUSH PRIVILEGES;
-COMMIT;
-  `,
+COMMIT;`,
 };
 
+const mongodbAtlasRoles = {
+  [roRole]: (o) => {
+    o.roles = [{ databaseName: "admin", roleName: "readAnyDatabase" }];
+    return {
+      username: o.user,
+      password: o.password,
+      description: `Provisioned by ${user_prefix}`,
+      labels: [],
+      scopes: [],
+      databaseName: "admin",
+      groupId: o.atlasGroupID,
+      roles: o.roles,
+    };
+  },
+  [rwRole]: (o) => {
+    o.roles = [{ databaseName: "admin", roleName: "readWriteAnyDatabase" }];
+    return mongodbAtlasRoles[roRole](o);
+  },
+  [adminRole]: (o) => {
+    o.roles = [
+      { databaseName: "admin", roleName: "readWriteAnyDatabase" },
+      { databaseName: "admin", roleName: "userAdminAnyDatabase" },
+    ];
+    return mongodbAtlasRoles[roRole](o);
+  },
+};
+
+function openCsvConfig(csvFile) {
+  const csvData = fs.readFileSync(csvFile);
+  const dbinstances = csvsync.parse(csvData, {
+    columns: true,
+    skip_empty_lines: true,
+    trim: true,
+  });
+  errors = [];
+  for (const [index, csv] of dbinstances.entries()) {
+    if (csv.vault_path_prefix == "") {
+      errors.push(`record=${index} vault_path_prefix is required`);
+    }
+
+    if (csv.action != "create" && csv.action != "upsert") {
+      errors.push("wrong action type, accept (create or upsert)");
+    }
+    if (
+      csv.db_type != "mongodb-atlas" &&
+      csv.db_type != "mysql" &&
+      csv.db_type != "postgres"
+    ) {
+      errors.push(
+        `record=${index} wrong db_type (${csv.db_type}), accept (postgres, mysql or mongodb-atlas)`,
+      );
+    }
+    if (csv.db_type == "mongodb-atlas" && csv.atlas_group_id == "") {
+      errors.push(`record=${index} missing atlas_group_id attribute`);
+    }
+
+    if (csv.db_type == "mysql" || csv.db_type == "postgres") {
+      for (attr of [
+        "db_host",
+        "db_port",
+        "db_admin_user",
+        "db_admin_password",
+      ]) {
+        if (csv[attr] == "") {
+          errors.push(
+            `record=${index} ${attr} is required when db_type is mysql or postgres`,
+          );
+        }
+      }
+    }
+  }
+  if (errors.length > 0) {
+    throw new Error(errors.join("\n"));
+  }
+  return dbinstances;
+}
+
+async function httpRequest(method, uri, data) {
+  const options = {
+    digestAuth: `${ATLAS_USER}:${ATLAS_USER_KEY}`,
+    headers: {
+      Accept: "application/vnd.atlas.2023-01-01+json", // update date to desired API version
+    },
+    method: method,
+    data: data,
+    contentType: "json",
+  };
+  const res = await urllib.request(uri, options);
+  if (res.data != null) {
+    try {
+      res.data = res.data.toString();
+    } catch (_) {}
+  }
+  return res;
+}
+
 function checkLiveness(host, port) {
+  host = host ? host : "";
+  port = port ? port : 0;
   return new Promise((resolve, _) => {
+    if (host == "" || port == 0) {
+      resolve("missing host or port configuration");
+      return;
+    }
     const client = net.connect(port, host, () => {
       client.end();
       resolve(null);
@@ -251,7 +355,7 @@ async function provisionRoles(csv, roleName, password) {
             ),
           );
         }
-        query = postgres_roles[roleName]({
+        query = postgresRoles[roleName]({
           user: userRole,
           password: password,
         });
@@ -281,7 +385,7 @@ async function provisionRoles(csv, roleName, password) {
         }
       case "mysql":
         console.log(`${dbEntry} - start provisioning roles and privileges`);
-        query = mysql_roles[roleName]({ user: userRole, password: password });
+        query = mysqlRoles[roleName]({ user: userRole, password: password });
         const conn = mysql.createConnection({
           host: csv.db_host,
           port: csv.db_port,
@@ -298,6 +402,34 @@ async function provisionRoles(csv, roleName, password) {
           throw ex;
         });
         conn.end();
+        return new Promise((resolve, _) => resolve(null));
+      case "mongodb-atlas":
+        console.log(
+          `${dbEntry} - start provisioning roles and privileges (atlas api)`,
+        );
+        const atlasGroupID = csv.atlas_group_id ? csv.atlas_group_id : "";
+        if (atlasGroupID == "") {
+          throw new Error(`missing atlas group id (project id)`);
+        }
+
+        requestPayload = mongodbAtlasRoles[roleName]({
+          user: userRole,
+          password: password,
+          atlasGroupID: atlasGroupID,
+        });
+        let uri = `${baseAtlasAPIUrl}/groups/${atlasGroupID}/databaseUsers/admin/${userRole}`;
+        let res = await httpRequest("PATCH", uri, requestPayload);
+
+        // user does not exists
+        if (res.status == 404) {
+          uri = `${baseAtlasAPIUrl}/groups/${atlasGroupID}/databaseUsers`;
+          res = await httpRequest("POST", uri, requestPayload);
+        }
+        if (res.status > 399) {
+          throw new Error(
+            `unable to update or create user, status=${res.status}, body=${res.data}`,
+          );
+        }
         return new Promise((resolve, _) => resolve(null));
       default:
         return new Promise((resolve, _) =>
@@ -323,24 +455,19 @@ function generateRandomPassword() {
     if (process.argv.length > 2) {
       csvFile = process.argv[2];
     }
-    const csvData = fs.readFileSync(csvFile);
-    const dbinstances = csvsync.parse(csvData, {
-      columns: true,
-      skip_empty_lines: true,
-      trim: true,
-    });
+
+    const vaultClient = await newVaultClient(
+      process.env.VAULT_ADDR,
+      process.env.VAULT_ROLE_ID,
+      process.env.VAULT_SECRET_ID,
+    );
+    // const csvData = fs.readFileSync(csvFile);
+    const dbinstances = openCsvConfig(csvFile);
 
     if (Array.from(dbinstances).length == 0) {
       console.log("csv file with invalid format or missing records");
       process.exit(1);
     }
-
-    const csvItem = dbinstances[0];
-    const vaultClient = await newVaultClient(
-      csvItem.vault_addr,
-      csvItem.vault_role_id,
-      csvItem.vault_secret_id,
-    );
 
     for (const [i, csv] of dbinstances.entries()) {
       const dbEntry = `${csv.db_type}/${csv.db_host}`;
@@ -354,16 +481,20 @@ function generateRandomPassword() {
         );
         continue;
       }
-      const err = await checkLiveness(csv.db_host, csv.db_port);
-      // skip databases that failed to connect
-      if (err) {
-        console.log(
-          `${dbEntry} - not ready at port ${csv.db_port}, reason=${err}`,
-        );
-        output[i].status = "db:liveness-failed";
-        continue;
+
+      if (csv.db_type != "mongodb-atlas") {
+        const err = await checkLiveness(csv.db_host, csv.db_port);
+        // skip databases that failed to connect
+        if (err) {
+          console.log(
+            `${dbEntry} - not ready at port ${csv.db_port}, reason=${err}`,
+          );
+          output[i].status = "db:liveness-failed";
+          continue;
+        }
+        console.log(`${dbEntry} - database ready at port ${csv.db_port}`);
       }
-      console.log(`${dbEntry} - database ready at port ${csv.db_port}`);
+
       for (role of roleList) {
         const userRole = `${user_prefix}_${role}`;
         const vaultPath = `${csv.vault_path_prefix}${csv.db_type}/${csv.db_host}/${userRole}`;
@@ -387,8 +518,10 @@ function generateRandomPassword() {
         }
 
         const randomPasswd = generateRandomPassword();
-        // const roleQuery = postgres_roles[role](userRole, randomPasswd);
         err = await provisionRoles(csv, role, randomPasswd);
+        console.log(
+          `${dbEntry} - finished provisioning roles, error=${err != null}`,
+        );
         if (err != null) {
           output[i].status = "db:query-error";
           console.log(
@@ -411,8 +544,10 @@ function generateRandomPassword() {
       }
     }
   } catch (e) {
-    console.log("\n--> output");
-    console.log(JSON.stringify(output, null, 2));
+    if (output.length > 0) {
+      console.log("\n--> output");
+      console.log(JSON.stringify(output, null, 2));
+    }
 
     console.trace(e.stack || e);
     process.exit(1);

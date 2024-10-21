@@ -6,7 +6,7 @@ It contain scripts to provision database roles and save them into Vault.
 
 - [x] Postgres
 - [x] MySQL
-- [ ] MongoDB
+- [x] MongoDB Atlas
 
 ## Configuration
 
@@ -15,28 +15,42 @@ The configuration file is in csv format. The sample configuration is available a
 | configuration     | required | description |
 |-------------------|----------|-------------|
 | action            | yes      | **upsert** will replace the role. **create** checks if the user role exists in vault before creating  |
-| vault_addr        | yes      | the URL of the Vault Server, e.g.: http://127.0.0.1:8200  |
-| vault_role_id     | no       | the role id to use with Vault app role auth method, when this configuration is empty the secret id will be used as the vault token value |
-| vault_secret_id   | yes      | the secret id of the Vault app role auth method, it could be also the vault token |
 | vault_path_prefix | yes      | the prefix to use to store the provisioned roles |
 | security_group_id | no       | this configuration is not implemented |
 | hoop_agent_ip     | no       | this configuration is not implemented |
 | db_type           | yes      | the type of the database engine (postgres, mysql or mongodb). |
 | db_host           | yes      | the host of the database instance |
-| db_port           | yes      | the port of the database instance |
-| db_admin_user     | yes      | the admin user with super privileges to provision user profiles |
-| db_admin_password | yes      | the admin password |
-| db_identifier     | no      | this configuration is not implemented |
-| business_unit     | no      | this configuration is not implemented |
-| owner_email       | no      | this configuration is not implemented |
-| cto_email         | no | this configuration is not implemented |
+| db_port           | yes*     | the port of the database instance |
+| db_admin_user     | yes*     | the admin user with super privileges to provision user profiles |
+| db_admin_password | yes*     | the admin password |
+| atlas_group_id    | yes*     | the Atlas project in which the users will be provisioned |
+| db_identifier     | no       | this configuration is not implemented |
+| business_unit     | no       | this configuration is not implemented |
+| owner_email       | no       | this configuration is not implemented |
+| cto_email         | no       | this configuration is not implemented |
 
-### Vault
+### Environment Variables
 
-The `vault_addr`, `vault_role_id` and `vault_secret_id` attributes are used only in the first entry to configure Vault.
-The onwards entries could be left as empty.
+| env              | description |
+|------------------|-------------|
+| VAULT_ADDR       | the URL of the Vault Server, e.g.: http://127.0.0.1:8200  |
+| VAULT_ROLE_ID    | the role id to use with Vault app role auth method, when this configuration is empty the secret id will be used as the vault token value |
+| VAULT_SECRET_ID  | the secret id of the Vault app role auth method, it could be also the vault token |
+| VAULT_TOKEN      | the token to authenticate on Vault in case `VAULT_SECRET_ID` is not set |
+| ATLAS_USER       | the Atlas Api key user id. Only used when it's a `mongodb-atlas` db type |
+| ATLAS_USER_KEY   | the Atlas Api Secret Key. Only used when it's a `mongodb-atlas` db type |
 
-Roles will be provisioned using the `vault_path_prefix` in the following format: `dbmng_hoop_{role}`.
+The `VAULT_ADDR` and `VAULT_SECRET_ID` or `VAULT_TOKEN` are required attributes to connect on Vault.
+To use app role authentication make sure to expose `VAULT_ROLE_ID` and `VAULT_SECRET_ID`.
+
+> The secret id of the Vault app role auth method, it could be also the vault token
+
+The Atlas configuration is required when provisioning users to a Mongo Atlas.
+Follow this [guide](https://www.mongodb.com/docs/atlas/configure-api-access/) to obtain credentials to provision roles via Atlas API.
+
+---
+
+Roles will be provisioned using the `vault_path_prefix` csv configuration in the following format: `dbmng_hoop_{role}`.
 
 - `{dbname}` is the database name discovered for each database engine
 - `{role}` is the name of the role (`ro`, `rw`, `admin`)
@@ -45,7 +59,7 @@ The path of a provisioned user will be available in the following format in a Ke
 
 - `{mount_path}/data/{db_type}/{db_host}/{user_role}`
 
-Example: `dbsecrets/data/postgres/127.0.0.1/dbmng_mydbname_ro`
+Example: `dbsecrets/data/postgres/127.0.0.1/dbmng_hoop_ro`
 
 ### Provisioned Roles
 
@@ -69,9 +83,9 @@ Example: `dbsecrets/data/postgres/127.0.0.1/dbmng_mydbname_ro`
 
 | role                   | privileges |
 |------------------------|------------|
-| `dbmng_hoop_ro`    | Not Implemented |
-| `dbmng_hoop_rw`    | Not Implemented |
-| `dbmng_hoop_admin` | Not Implemented |
+| `dbmng_hoop_ro`    | `readAnyDatabase` |
+| `dbmng_hoop_rw`    | `readWriteAnyDatabase` |
+| `dbmng_hoop_admin` | `readWriteAnyDatabase`, `userAdminAnyDatabase` |
 
 ## Development
 
@@ -120,6 +134,7 @@ This script requires nodejs version 20+ and the following dependencies installed
 - node-vault: `0.10.2`
 - pg: `8.13.0`
 - mysql2: `3.11.3`
+- urllib: `4.4.0`
 
 To extend the Hoop Agent image with those dependencies, follow the steps below:
 
@@ -132,7 +147,8 @@ RUN npm install --global \
     csv-parse@5.5.6 \
     node-vault@0.10.2 \
     pg@8.13.0 \
-    mysql2@3.11.3
+    mysql2@3.11.3 \
+    urllib@4.4.0
 
 RUN curl -sL https://raw.githubusercontent.com/hoophq/dbmanagement/refs/heads/main/main.js > /app/dbmanagement.js
 ```
