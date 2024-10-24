@@ -33,6 +33,7 @@ The configuration file is in csv format. The sample configuration is available a
 
 | env              | description |
 |------------------|-------------|
+| CSV_FILE         | the path of csv file |
 | VAULT_ADDR       | the URL of the Vault Server, e.g.: http://127.0.0.1:8200  |
 | VAULT_ROLE_ID    | the role id to use with Vault app role auth method, when this configuration is empty the secret id will be used as the vault token value |
 | VAULT_SECRET_ID  | the secret id of the Vault app role auth method, it could be also the vault token |
@@ -128,7 +129,7 @@ node main.js <<< $(cat ./data/config.csv)
 CSV_FILE=./data/config.csv node main.js
 ```
 
-## Running with Hoop
+## Running as a Hoop Runbook
 
 This script requires nodejs version 20+ and the following dependencies installed locally:
 
@@ -138,12 +139,10 @@ This script requires nodejs version 20+ and the following dependencies installed
 - mysql2: `3.11.3`
 - urllib: `4.4.0`
 
-To extend the Hoop Agent image with those dependencies, follow the steps below:
-
 1. Create a Dockerfile and install the dependencies via `npm`
 
 ```Dockerfile
-FROM hoophq/hoopdev:1.26.1
+FROM hoophq/hoopdev:1.27.4
 
 RUN npm install --global \
     csv-parse@5.5.6 \
@@ -151,8 +150,6 @@ RUN npm install --global \
     pg@8.13.0 \
     mysql2@3.11.3 \
     urllib@4.4.0
-
-RUN curl -sL https://raw.githubusercontent.com/hoophq/dbmanagement/refs/heads/main/main.js > /app/dbmanagement.js
 ```
 
 2. Build and push your image to your registry
@@ -162,19 +159,23 @@ docker build -t myorg/hoopagent .
 docker push myorg/hoopagent
 ```
 
-3. Run your agent in your infra-structure
+3. Configure a [Runbook](https://hoop.dev/docs/learn/runbooks)
 
-```sh
-docker run --rm -it -e HOOP_KEY=<your-agent-key> myorg/hoopagent
-```
+Create the file `dbmanagement.runbook.js` in your runbook repository.
 
 4. Configure a connection
 
-Create a connection in the webapp with the following attributes
+Create a connection in the Webapp with the following attributes
 
 - Type: `Shell`
-- Command: `node /app/dbmanagement.js`
+- Command: `node`
 - Environment Variables: `NODE_PATH=/usr/local/lib/node_modules/`
+
+Via cli:
+
+```sh
+hoop admin create conn node -e NODE_PATH=/usr/local/lib/node_modules/ -a '<your-agent>' -- node
+```
 
 5. Configure the csv file
 
@@ -185,6 +186,30 @@ Copy the file [./data/config-sample.csv](./data/config-sample.csv) and replace w
 - Add Prefix of the Key Value Store V2 ( e.g.: `{mount_path}/data` )
 - Add the database information (type, host, user, etc)
 
-6. Execute it
+6. Execute it via API
 
-Paste the contents in the Webapp console and execute it.
+- Create the following payload
+
+```json
+# runbook-request.json
+{
+  "file_name": "dbmanagement.runbook.js",
+  "client_args": [],
+  "env_vars": {
+    "filesystem:CSV_FILE": "<base64-csv-file>",
+    "envvar:VAULT_ADDR": "<base64-vault-addr>",
+    "envvar:VAULT_TOKEN": "<base64-vault-token>"
+  }
+}
+```
+
+- Obtain an api key or a valid token
+- Execute it via `curl`
+
+```sh
+export HOOP_TOKEN=
+curl $API_URL/api/plugins/runbooks/connections/node/exec \
+ -d@runbook-request.json \
+  -H "content-type: application/json" \
+  -H "Authorization: Bearer $HOOP_TOKEN"
+```
