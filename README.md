@@ -207,6 +207,7 @@ Copy the file [./data/config-sample.csv](./data/config-sample.csv) and replace w
 
 ```sh
 export HOOP_TOKEN=
+export API_URL=
 curl $API_URL/api/plugins/runbooks/connections/node/exec \
  -d@runbook-request.json \
   -H "content-type: application/json" \
