@@ -188,10 +188,9 @@ Copy the file [./data/config-sample.csv](./data/config-sample.csv) and replace w
 
 6. Execute it via API
 
-- Create the following payload
+- Create the file `runbook-request.json` with the following content:
 
 ```json
-# runbook-request.json
 {
   "file_name": "dbmanagement.runbook.js",
   "client_args": [],
