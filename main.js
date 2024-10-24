@@ -451,9 +451,18 @@ function generateRandomPassword() {
 (async () => {
   const output = [];
   try {
+    // 1. load csv configuration from stdin by default
+    // 2. or use CSV_FILE env file path
+    // 3. or use the file path from script arguments
     let csvFile = 0;
-    if (process.argv.length > 2) {
+    if (process.env.CSV_FILE != "") {
+      console.log("loaded csv file from env CSV_FILE");
+      csvFile = process.env.CSV_FILE;
+    } else if (process.argv.length > 2) {
+      console.log("loaded csv file from arguments");
       csvFile = process.argv[2];
+    } else {
+      console.log("loaded csv file from stdin");
     }
 
     const vaultClient = await newVaultClient(
@@ -461,7 +470,6 @@ function generateRandomPassword() {
       process.env.VAULT_ROLE_ID,
       process.env.VAULT_SECRET_ID,
     );
-    // const csvData = fs.readFileSync(csvFile);
     const dbinstances = openCsvConfig(csvFile);
 
     if (Array.from(dbinstances).length == 0) {

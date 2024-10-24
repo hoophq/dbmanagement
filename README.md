@@ -124,6 +124,8 @@ Make sure to be able to reach via network the following services:
 node main.js ./data/config.csv
 # from stdin
 node main.js <<< $(cat ./data/config.csv)
+# from env
+CSV_FILE=./data/config.csv node main.js
 ```
 
 ## Running with Hoop
