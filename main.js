@@ -8,11 +8,11 @@ const net = require("net");
 const pg = require("pg");
 const mysql = require("mysql2");
 
-const user_prefix = "dbmng_hoop";
+const user_prefix = "hoop";
 const defaultConnectTimeoutMs = 7000; // 7s
 const roRole = "ro";
 const rwRole = "rw";
-const adminRole = "admin";
+const adminRole = "ddl";
 const roleList = [roRole, rwRole, adminRole];
 
 const baseAtlasAPIUrl = "https://cloud.mongodb.com/api/atlas/v2";
@@ -83,13 +83,14 @@ COMMIT;`,
 
 const mongodbAtlasRoles = {
   [roRole]: (o) => {
+    const identifier = o.dbIdentifier;
     o.roles = [{ databaseName: "admin", roleName: "readAnyDatabase" }];
     return {
       username: o.user,
       password: o.password,
       description: `Provisioned by ${user_prefix}`,
       labels: [],
-      scopes: [],
+      scopes: [{ name: identifier }],
       databaseName: "admin",
       groupId: o.atlasGroupID,
       roles: o.roles,
@@ -101,8 +102,8 @@ const mongodbAtlasRoles = {
   },
   [adminRole]: (o) => {
     o.roles = [
-      { databaseName: "admin", roleName: "readWriteAnyDatabase" },
-      { databaseName: "admin", roleName: "userAdminAnyDatabase" },
+      { databaseName: "admin", roleName: "atlasAdmin" },
+      { databaseName: "local", roleName: "dbAdmin" },
     ];
     return mongodbAtlasRoles[roRole](o);
   },
@@ -162,7 +163,7 @@ async function httpRequest(method, uri, data) {
   const options = {
     digestAuth: `${ATLAS_USER}:${ATLAS_USER_KEY}`,
     headers: {
-      Accept: "application/vnd.atlas.2023-01-01+json", // update date to desired API version
+      Accept: "application/vnd.atlas.2023-01-01+json", 
     },
     method: method,
     data: data,
@@ -416,6 +417,7 @@ async function provisionRoles(csv, roleName, password) {
           user: userRole,
           password: password,
           atlasGroupID: atlasGroupID,
+          dbIdentifier: csv.db_identifier,
         });
         let uri = `${baseAtlasAPIUrl}/groups/${atlasGroupID}/databaseUsers/admin/${userRole}`;
         let res = await httpRequest("PATCH", uri, requestPayload);
