@@ -14,15 +14,11 @@ The configuration file is in csv format. The sample configuration is available a
 
 | configuration     | required | description |
 |-------------------|----------|-------------|
-| action            | yes      | **upsert** will replace the role. **create** checks if the user role exists in vault before creating  |
+| action            | yes      | **upsert** will replace the role. **create** check if the user role exists in Vault before creating |
 | vault_path_prefix | yes      | the prefix to use to store the provisioned roles |
 | security_group_id | no       | this configuration is not implemented |
 | hoop_agent_ip     | no       | this configuration is not implemented |
-| db_type           | yes      | the type of the database engine (postgres, mysql or mongodb). |
-| db_host           | yes      | the host of the database instance |
-| db_port           | yes*     | the port of the database instance |
-| db_admin_user     | yes*     | the admin user with super privileges to provision user profiles |
-| db_admin_password | yes*     | the admin password |
+| connection_string | yes      | the connection string of the database, accept (`mongodb-atlas://`, `postgres://` and `mysql://`). |
 | atlas_group_id    | yes*     | the Atlas project in which the users will be provisioned |
 | db_identifier     | no       | this configuration is not implemented |
 | business_unit     | no       | this configuration is not implemented |
@@ -51,16 +47,47 @@ Follow this [guide](https://www.mongodb.com/docs/atlas/configure-api-access/) to
 
 ---
 
-Roles will be provisioned using the `vault_path_prefix` csv configuration in the following format: `dbmng_hoop_{role}`.
+Roles will be provisioned using the `vault_path_prefix` csv configuration in the following format: `hoop_{role}`.
 
-- `{dbname}` is the database name discovered for each database engine
-- `{role}` is the name of the role (`ro`, `rw`, `admin`)
+- `{role}` is the name of the role (`ro`, `rw`, `ddl`)
+- `{db_hostname}` is the hostname identified in the connection string
+- `{db_identifier}` is the identifier of the instance in the csv file
 
 The path of a provisioned user will be available in the following format in a Key Value version 2:
 
-- `{mount_path}/data/{db_type}/{db_host}/{user_role}`
+**Postgres / MySQL**
 
-Example: `dbsecrets/data/postgres/127.0.0.1/dbmng_hoop_ro`
+- `{mount_path}/data/hoop_{role}_{db_hostname}`
+
+Vault Secret
+
+```json
+{
+  "HOST": "<db-host>",
+  "PORT": "<db-port>",
+  "USER": "<db-user>",
+  "PASSWORD": "<db-password>",
+  "DB": "<db-name>"
+}
+```
+
+**MongoDB**
+
+- `{mount_path}/data/hoop_{role}_{db_identifier}_{db_hostname}`
+
+Vault Secret
+
+```json
+{
+  "MONGODB_URI": "<connection-string>"
+}
+```
+
+Examples:
+
+- `dbsecrets/data/hoop_rw_127.0.0.1`
+- `dbsecrets/data/hoop_ro_mongodb-cluster_127.0.0.1`
+- `dbsecrets/data/hoop_ddl_127.0.0.1`
 
 ### Provisioned Roles
 

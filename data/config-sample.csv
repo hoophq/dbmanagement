@@ -1,4 +1,4 @@
-action,vault_path_prefix,security_group_id,hoop_agent_ip,db_type,db_host,db_port,db_admin_user,db_admin_password,atlas_group_id,db_identifier,business_unit,owner_email
-upsert,dbsecrets/data/,,,postgres,127.0.0.1,5432,adminuser,my-super-secret-passwd,,localdb,bo,john.doe@domain.tld
-upsert,dbsecrets/data/,,,mysql,127.0.0.1,3306,adminuser,my-super-secret-passwd,,localdb,bo,john.doe@domain.tld
-upsert,dbsecrets/data/,,,mongodb-atlas,127.0.0.1,,,,223004fb3d2e943e12170e9a,localdb,bo,john.doe@domain.tld
+action,vault_path_prefix,security_group_id,hoop_agent_ip,connection_string,atlas_group_id,db_identifier,business_unit,owner_email
+upsert,dbsecrets/data/,,,postgres://pgroot:super-secret-pwd@127.0.0.1:5432?sslmode=disable,,localdb,bo,john.doe@domain.tld
+upsert,dbsecrets/data/,,,mysql://root:super-secret-pwd@127.0.0.1:3306,,localdb,bo,john.doe@domain.tld
+upsert,dbsecrets/data/,,,mongodb-atlas://_:_@cluster-name.mongodb.net,223004fb3d2e943e12170e9a,localdb,bo,john.doe@domain.tld

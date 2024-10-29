@@ -84,13 +84,15 @@ COMMIT;`,
 const mongodbAtlasRoles = {
   [roRole]: (o) => {
     const identifier = o.dbIdentifier;
-    o.roles = [{ databaseName: "admin", roleName: "readAnyDatabase" }];
+    if (!o.roles) {
+      o.roles = [{ databaseName: "admin", roleName: "readAnyDatabase" }];
+    }
     return {
       username: o.user,
       password: o.password,
       description: `Provisioned by ${user_prefix}`,
       labels: [],
-      scopes: [{ name: identifier }],
+      scopes: [{ name: identifier, type: 'CLUSTER' }],
       databaseName: "admin",
       groupId: o.atlasGroupID,
       roles: o.roles,
@@ -125,31 +127,31 @@ function openCsvConfig(csvFile) {
     if (csv.action != "create" && csv.action != "upsert") {
       errors.push("wrong action type, accept (create or upsert)");
     }
+
+    if (!csv.db_identifier) {
+      errors.push(`record=${index} missing db_identifier attribute`,);
+    }
+    const uri = parse_uri(csv.connection_string)
     if (
-      csv.db_type != "mongodb-atlas" &&
-      csv.db_type != "mysql" &&
-      csv.db_type != "postgres"
+      uri.scheme != "mongodb-atlas" &&
+      uri.scheme != "mysql" &&
+      uri.scheme != "postgres"
     ) {
       errors.push(
-        `record=${index} wrong db_type (${csv.db_type}), accept (postgres, mysql or mongodb-atlas)`,
+        `record=${index} wrong type for connection string (scheme=${uri.scheme}), accepted: postgres://, mysql:// or mongodb-atlas://`,
       );
     }
-    if (csv.db_type == "mongodb-atlas" && csv.atlas_group_id == "") {
+    if (uri.scheme == "mongodb-atlas" && csv.atlas_group_id == "") {
       errors.push(`record=${index} missing atlas_group_id attribute`);
     }
 
-    if (csv.db_type == "mysql" || csv.db_type == "postgres") {
-      for (attr of [
-        "db_host",
-        "db_port",
-        "db_admin_user",
-        "db_admin_password",
-      ]) {
-        if (csv[attr] == "") {
-          errors.push(
-            `record=${index} ${attr} is required when db_type is mysql or postgres`,
-          );
-        }
+    if (uri.scheme == "mysql" || uri.scheme == "postgres") {
+      if (!uri.username || !uri.password) {
+        errors.push(`record=${index} missing username or password in connection string`);
+      }
+      const hostEntry = uri.hosts[0];
+      if (!hostEntry?.host || !hostEntry?.port) {
+        errors.push(`record=${index} missing host or port in connection string`);
       }
     }
   }
@@ -163,7 +165,7 @@ async function httpRequest(method, uri, data) {
   const options = {
     digestAuth: `${ATLAS_USER}:${ATLAS_USER_KEY}`,
     headers: {
-      Accept: "application/vnd.atlas.2023-01-01+json", 
+      Accept: "application/vnd.atlas.2023-01-01+json",
     },
     method: method,
     data: data,
@@ -329,25 +331,59 @@ async function newVaultClient(addr, roleID, secretID) {
     vaultClient = vault(opts);
   }
   const options = { requestOptions: { timeout: defaultConnectTimeoutMs } };
-  let { version, initialized, sealed } = await vaultClient.health(options);
+  let res = await vaultClient.health(options);
   console.log(
-    `--> Vault connected at ${addr}, version=${version}, initialized=${initialized}, sealed=${sealed}`,
+    `--> Vault health response from address ${addr ? addr : '<empty>'}, version=${res?.version}, initialized=${res?.initialized}, sealed=${res?.sealed}`,
   );
+  if (!res?.initialized) {
+    throw new Error(`Vault is not initialized, check the Vault client configuration.`)
+  }
   return vaultClient;
 }
 
-async function provisionRoles(csv, roleName, password) {
-  const userRole = `${user_prefix}_${roleName}`;
-  const dbEntry = `${csv.db_type}/${csv.db_host}`;
+function parseVaultPayload(uri, roleName, username, password) {
+  const { host, port } = uri.firstHost;
+  switch (uri.scheme) {
+  case "mysql":
+    return {
+      HOST: host,
+      PORT: port,
+      USER: username,
+      PASSWORD: password,
+      DB: 'mysql',
+    };
+  case "postgres":
+    return {
+      HOST: host,
+      PORT: port,
+      USER: username,
+      PASSWORD: password,
+      DB: 'postgres',
+      SSL_MODE: uri.options.sslmode ? uri.options.sslmode : 'prefer',
+    };
+  case "mongodb-atlas":
+    let connStr = `mongodb+srv://${username}:${password}@${host}:${port}/admin?retryWrites=true&w=majority&readPreference=secondaryPreferred`
+    if (roleName == adminRole) {
+      connStr = `mongodb+srv://${username}:${password}@${host}:${port}/admin?readPreference=primary`
+    }
+    return { MONGODB_URI: connStr }
+  default:
+    throw new Error(`scheme ${uri.scheme} not supported`);
+  }
+}
+
+async function provisionRoles(csv, userRoleName, roleName, password) {
+  const csuri = parse_uri(csv.connection_string);
+  const dbEntry = `${csuri.scheme}/${csuri.firstHost.host}`;
   let query = null;
   try {
-    switch (csv.db_type) {
+    switch (csuri.scheme) {
       case "postgres":
         const dbResult = await fetchPgDatabases(
-          csv.db_host,
-          csv.db_port,
-          csv.db_admin_user,
-          csv.db_admin_password,
+          csuri.firstHost.host,
+          csuri.firstHost.port,
+          csuri.username,
+          csuri.password,
         );
         if (dbResult?.err != null) {
           return new Promise((resolve, _) =>
@@ -357,7 +393,7 @@ async function provisionRoles(csv, roleName, password) {
           );
         }
         query = postgresRoles[roleName]({
-          user: userRole,
+          user: userRoleName,
           password: password,
         });
         console.log(
@@ -365,11 +401,11 @@ async function provisionRoles(csv, roleName, password) {
         );
         for (dbname of dbResult.items) {
           const pgClient = new pg.Client({
-            ssl: false,
-            host: csv.db_host,
-            port: csv.db_port,
-            user: csv.db_admin_user,
-            password: csv.db_admin_password,
+            ssl: csuri.options.sslmode != 'disable',
+            host: csuri.firstHost.host,
+            port: csuri.firstHost.port,
+            user: csuri.username,
+            password: csuri.password,
             database: dbname,
             application_name: user_prefix,
             connectionTimeoutMillis: defaultConnectTimeoutMs,
@@ -386,12 +422,12 @@ async function provisionRoles(csv, roleName, password) {
         }
       case "mysql":
         console.log(`${dbEntry} - start provisioning roles and privileges`);
-        query = mysqlRoles[roleName]({ user: userRole, password: password });
+        query = mysqlRoles[roleName]({ user: userRoleName, password: password });
         const conn = mysql.createConnection({
-          host: csv.db_host,
-          port: csv.db_port,
-          user: csv.db_admin_user,
-          password: csv.db_admin_password,
+          host: csuri.firstHost.host,
+          port: csuri.firstHost.port,
+          user: csuri.username,
+          password: csuri.password,
           database: "mysql",
           connectTimeout: defaultConnectTimeoutMs,
           multipleStatements: true,
@@ -408,23 +444,22 @@ async function provisionRoles(csv, roleName, password) {
         console.log(
           `${dbEntry} - start provisioning roles and privileges (atlas api)`,
         );
-        const atlasGroupID = csv.atlas_group_id ? csv.atlas_group_id : "";
-        if (atlasGroupID == "") {
+        if (!csv.atlas_group_id) {
           throw new Error(`missing atlas group id (project id)`);
         }
 
         requestPayload = mongodbAtlasRoles[roleName]({
-          user: userRole,
+          user: userRoleName,
           password: password,
-          atlasGroupID: atlasGroupID,
+          atlasGroupID: csv.atlas_group_id,
           dbIdentifier: csv.db_identifier,
         });
-        let uri = `${baseAtlasAPIUrl}/groups/${atlasGroupID}/databaseUsers/admin/${userRole}`;
+        let uri = `${baseAtlasAPIUrl}/groups/${csv.atlas_group_id}/databaseUsers/admin/${userRoleName}`;
         let res = await httpRequest("PATCH", uri, requestPayload);
 
         // user does not exists
         if (res.status == 404) {
-          uri = `${baseAtlasAPIUrl}/groups/${atlasGroupID}/databaseUsers`;
+          uri = `${baseAtlasAPIUrl}/groups/${csv.atlas_group_id}/databaseUsers`;
           res = await httpRequest("POST", uri, requestPayload);
         }
         if (res.status > 399) {
@@ -435,7 +470,7 @@ async function provisionRoles(csv, roleName, password) {
         return new Promise((resolve, _) => resolve(null));
       default:
         return new Promise((resolve, _) =>
-          resolve(`database type ${csv.db_type} not implemented`),
+          resolve(`database scheme ${csuri.scheme} not implemented`),
         );
     }
   } catch (ex) {
@@ -448,6 +483,63 @@ function generateRandomPassword() {
   return Array.from(crypto.webcrypto.getRandomValues(new Uint32Array(30)))
     .map((x) => characters[x % characters.length])
     .join("");
+}
+
+function parse_uri(uri) {
+  const connectionStringParser = new RegExp(
+    "^\\s*" + // Optional whitespace padding at the beginning of the line
+    "([^:]+)://" + // Scheme (Group 1)
+    "(?:([^:@,/?=&]+)(?::([^:@,/?=&]+))?@)?" + // User (Group 2) and Password (Group 3)
+    "([^@/?=&]+)" + // Host address(es) (Group 4)
+    "(?:/([^:@,/?=&]+)?)?" + // Endpoint (Group 5)
+    "(?:\\?([^:@,/?]+)?)?" + // Options (Group 6)
+    "\\s*$", // Optional whitespace padding at the end of the line
+    "gi");
+  const result = {};
+
+  if (!uri.includes("://")) {
+    return result
+    // throw new Error(`No scheme found in URI ${uri}`);
+  }
+
+  const tokens = connectionStringParser.exec(uri);
+
+  if (Array.isArray(tokens)) {
+    result.scheme = tokens[1];
+    result.username = tokens[2] ? decodeURIComponent(tokens[2]) : tokens[2];
+    result.password = tokens[3] ? decodeURIComponent(tokens[3]) : tokens[3];
+    result.hosts = _parseAddress(tokens[4]);
+    result.firstHost = {
+      host: result.hosts[0]?.host,
+      port: result.hosts[0]?.port,
+    }
+    result.endpoint = tokens[5] ? decodeURIComponent(tokens[5]) : tokens[5];
+    result.options = tokens[6] ? _parseOptions(tokens[6]) : tokens[6];
+  }
+  return result;
+}
+
+function _parseAddress(addresses) {
+  return addresses.split(",")
+    .map((address) => {
+      const i = address.indexOf(":");
+
+      return (i >= 0 ?
+        { host: decodeURIComponent(address.substring(0, i)), port: +address.substring(i + 1) } :
+        { host: decodeURIComponent(address) });
+    });
+}
+
+function _parseOptions(options)  {
+  const result = {};
+  options.split("&")
+    .forEach((option) => {
+      const i = option.indexOf("=");
+      if (i >= 0) {
+        result[decodeURIComponent(option.substring(0, i))] = decodeURIComponent(option.substring(i + 1));
+      }
+    });
+  return result;
 }
 
 (async () => {
@@ -480,7 +572,8 @@ function generateRandomPassword() {
     }
 
     for (const [i, csv] of dbinstances.entries()) {
-      const dbEntry = `${csv.db_type}/${csv.db_host}`;
+      const uri = parse_uri(csv.connection_string)
+      const dbEntry = `${uri.scheme}/${uri.firstHost.host}`;
       output[i] = { record: dbEntry, status: "initial" };
       console.log(`--> ${dbEntry} - starting provisioning roles`);
 
@@ -492,24 +585,28 @@ function generateRandomPassword() {
         continue;
       }
 
-      if (csv.db_type != "mongodb-atlas") {
-        const err = await checkLiveness(csv.db_host, csv.db_port);
+      if (uri.scheme != "mongodb-atlas") {
+        const err = await checkLiveness(uri.firstHost.host, uri.firstHost.port);
         // skip databases that failed to connect
         if (err) {
           console.log(
-            `${dbEntry} - not ready at port ${csv.db_port}, reason=${err}`,
+            `${dbEntry} - not ready at port ${uri.firstHost.port}, reason=${err}`,
           );
           output[i].status = "db:liveness-failed";
           continue;
         }
-        console.log(`${dbEntry} - database ready at port ${csv.db_port}`);
+        console.log(`${dbEntry} - database ready at port ${uri.firstHost.port}`);
       }
 
-      for (role of roleList) {
-        const userRole = `${user_prefix}_${role}`;
-        const vaultPath = `${csv.vault_path_prefix}${csv.db_type}/${csv.db_host}/${userRole}`;
-        let { payload, err } = await getVaultSecret(vaultClient, vaultPath);
+      for (roleName of roleList) {
+        let userRole = `${user_prefix}_${roleName}`;
+        if (uri.scheme == "mongodb-atlas") {
+          userRole = `${user_prefix}_${csv.db_identifier}_${roleName}`;
+        }
+        const vaultPath = `${csv.vault_path_prefix}${userRole}_${uri.firstHost.host}`;
+        output[i][roleName] = { status: 'initial', user: userRole, vault_path: vaultPath }
 
+        let { payload, err } = await getVaultSecret(vaultClient, vaultPath);
         console.log(
           `${dbEntry} - vault: fetch secret, path=${vaultPath}, request_id=${payload.requestID}, version=${payload.version}, destroyed=${payload.destroyed}, err=${JSON.stringify(err)}`,
         );
@@ -519,39 +616,35 @@ function generateRandomPassword() {
           continue;
         }
 
-        output[i].user = userRole;
-        output[i].vault_path = vaultPath;
         // skip it for non 404 errors
         if (err?.statusCode > 0 && err?.statusCode != 404) {
-          output[i].status = "vault:fetch-failure";
+          output[i][roleName].status = "vault:fetch-failure";
           continue;
         }
 
         const randomPasswd = generateRandomPassword();
-        err = await provisionRoles(csv, role, randomPasswd);
+        err = await provisionRoles(csv, userRole, roleName, randomPasswd);
         console.log(
           `${dbEntry} - finished provisioning roles, error=${err != null}`,
         );
         if (err != null) {
-          output[i].status = "db:query-error";
+          output[i][roleName].status = "db:query-error";
           console.log(
             `${dbEntry} - query error, message=${err.message}, err=${JSON.stringify(err)}`,
           );
           continue;
         }
 
-        ({ payload, err } = await putVaultSecret(vaultClient, vaultPath, {
-          HOST: csv.db_host,
-          PORT: csv.db_port,
-          USER: userRole,
-          PASSWORD: randomPasswd,
-        }));
-        output[i].status = err == null ? "success" : "vault:write-failure";
+        const vaultPayload = parseVaultPayload(uri, roleName, userRole, randomPasswd);
+        ({ payload, err } = await putVaultSecret(vaultClient, vaultPath, vaultPayload));
+        output[i][roleName].status = err == null ? "success" : "vault:write-failure";
 
         console.log(
           `${dbEntry} - vault: write secret, path=${vaultPath}, request_id=${payload.requestID}, err=${JSON.stringify(err)}`,
         );
       }
+
+      output[i].status = 'finished'
     }
   } catch (e) {
     if (output.length > 0) {
