@@ -657,4 +657,5 @@ function _parseOptions(options)  {
   }
   console.log("\n--> output");
   console.log(JSON.stringify(output, null, 2));
+  process.exit(0);
 })();
