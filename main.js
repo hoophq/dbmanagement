@@ -199,17 +199,25 @@ function checkLiveness(host, port) {
   });
 }
 
-async function fetchPgDatabases(host, port, user, password) {
+async function fetchPgDatabases(connStr) {
   const dbItems = [];
   try {
     const pgClient = new pg.Client({
-      ssl: false,
-      host: host,
-      port: port,
-      user: user,
-      password: password,
+      ssl: process.env.PGSSLROOTCERT ? {
+        ca: fs.readFileSync(process.env.PGSSLROOTCERT).toString(),
+      } : false,
+      host: connStr.firstHost.host,
+      port: connStr.firstHost.port,
+      user: connStr.username,
+      password: connStr.password,
       database: "postgres",
       application_name: user_prefix,
+      dialectOptions: {
+        ssl: {
+          require: true,
+          rejectUnauthorized: false
+        }
+      },
       connectionTimeoutMillis: defaultConnectTimeoutMs,
     });
 
@@ -363,10 +371,11 @@ function parseVaultPayload(uri, roleName, username, password) {
     };
   case "mongodb-atlas":
     let connStr = `mongodb+srv://${username}:${password}@${host}:${port}/admin?retryWrites=true&w=majority&readPreference=secondaryPreferred`
-    if (roleName == adminRole) {
+    if (roleName == adminRole || roleName == rwRole) {
       connStr = `mongodb+srv://${username}:${password}@${host}:${port}/admin?readPreference=primary`
+      return { URI: connStr, URI_RW: connStr }
     }
-    return { MONGODB_URI: connStr }
+    return { URI: connStr }
   default:
     throw new Error(`scheme ${uri.scheme} not supported`);
   }
@@ -379,12 +388,7 @@ async function provisionRoles(csv, userRoleName, roleName, password) {
   try {
     switch (csuri.scheme) {
       case "postgres":
-        const dbResult = await fetchPgDatabases(
-          csuri.firstHost.host,
-          csuri.firstHost.port,
-          csuri.username,
-          csuri.password,
-        );
+        const dbResult = await fetchPgDatabases(csuri);
         if (dbResult?.err != null) {
           return new Promise((resolve, _) =>
             resolve(
@@ -401,7 +405,9 @@ async function provisionRoles(csv, userRoleName, roleName, password) {
         );
         for (dbname of dbResult.items) {
           const pgClient = new pg.Client({
-            ssl: csuri.options.sslmode != 'disable',
+            ssl: process.env.PGSSLROOTCERT ? {
+              ca: fs.readFileSync(process.env.PGSSLROOTCERT).toString(),
+            } : false,
             host: csuri.firstHost.host,
             port: csuri.firstHost.port,
             user: csuri.username,
@@ -542,6 +548,13 @@ function _parseOptions(options)  {
   return result;
 }
 
+function normalizeDbIdentifier(dbIdentifier) {
+  return dbIdentifier.
+    replace('-', '_').
+      toLowerCase().
+      replace(/[^a-zA-Z_ ]/g, "")
+}
+
 (async () => {
   const output = [];
   try {
@@ -601,7 +614,10 @@ function _parseOptions(options)  {
       for (roleName of roleList) {
         let userRole = `${user_prefix}_${roleName}`;
         if (uri.scheme == "mongodb-atlas") {
-          userRole = `${user_prefix}_${csv.db_identifier}_${roleName}`;
+          userRole = `${user_prefix}_${normalizeDbIdentifier(csv.db_identifier)}_${roleName}`;
+          if (roleName == adminRole) {
+            userRole = `dbre_${normalizeDbIdentifier(csv.db_identifier)}`;
+          }
         }
         const vaultPath = `${csv.vault_path_prefix}${userRole}_${uri.firstHost.host}`;
         output[i][roleName] = { status: 'initial', user: userRole, vault_path: vaultPath }

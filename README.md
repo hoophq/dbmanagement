@@ -36,6 +36,7 @@ The configuration file is in csv format. The sample configuration is available a
 | VAULT_TOKEN      | the token to authenticate on Vault in case `VAULT_SECRET_ID` is not set |
 | ATLAS_USER       | the Atlas Api key user id. Only used when it's a `mongodb-atlas` db type |
 | ATLAS_USER_KEY   | the Atlas Api Secret Key. Only used when it's a `mongodb-atlas` db type |
+| PGSSLROOTCERT    | the root CA cert for connecting via SSL for postgres instances |
 
 The `VAULT_ADDR` and `VAULT_SECRET_ID` or `VAULT_TOKEN` are required attributes to connect on Vault.
 To use app role authentication make sure to expose `VAULT_ROLE_ID` and `VAULT_SECRET_ID`.
