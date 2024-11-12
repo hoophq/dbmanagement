@@ -27,16 +27,20 @@ The configuration file is in csv format. The sample configuration is available a
 
 ### Environment Variables
 
-| env              | description |
-|------------------|-------------|
-| CSV_FILE         | the path of csv file |
-| VAULT_ADDR       | the URL of the Vault Server, e.g.: http://127.0.0.1:8200  |
-| VAULT_ROLE_ID    | the role id to use with Vault app role auth method, when this configuration is empty the secret id will be used as the vault token value |
-| VAULT_SECRET_ID  | the secret id of the Vault app role auth method, it could be also the vault token |
-| VAULT_TOKEN      | the token to authenticate on Vault in case `VAULT_SECRET_ID` is not set |
-| ATLAS_USER       | the Atlas Api key user id. Only used when it's a `mongodb-atlas` db type |
-| ATLAS_USER_KEY   | the Atlas Api Secret Key. Only used when it's a `mongodb-atlas` db type |
-| PGSSLROOTCERT    | the root CA cert for connecting via SSL for postgres instances |
+| env                   | required | description |
+|---------------------- | -------- | ------------|
+| CSV_FILE              | yes      | the path of csv file |
+| VAULT_ADDR            | yes      | the URL of the Vault Server, e.g.: http://127.0.0.1:8200  |
+| VAULT_ROLE_ID         | no       | the role id to use with Vault app role auth method, when this configuration is empty the secret id will be used as the vault token value |
+| VAULT_SECRET_ID       | no       | the secret id of the Vault app role auth method, it could be also the vault token |
+| VAULT_TOKEN           | no       | the token to authenticate on Vault in case `VAULT_SECRET_ID` is not set |
+| ATLAS_USER            | no       | the Atlas Api key user id. Only used when it's a `mongodb-atlas` db type |
+| ATLAS_USER_KEY        | no       | the Atlas Api Secret Key. Only used when it's a `mongodb-atlas` db type |
+| PGSSLROOTCERT         | no       | the root CA cert for connecting via SSL for postgres instances |
+| AWS_ACCESS_KEY_ID     | yes      | step functions aws access key id |
+| AWS_SECRET_ACCESS_KEY | yes      | step functions aws secret access key |
+| AWS_REGION            | no       | step functions aws region |
+| SFN_ARN               | yes      | the step functions arn to execute |
 
 The `VAULT_ADDR` and `VAULT_SECRET_ID` or `VAULT_TOKEN` are required attributes to connect on Vault.
 To use app role authentication make sure to expose `VAULT_ROLE_ID` and `VAULT_SECRET_ID`.
@@ -80,7 +84,8 @@ Vault Secret
 
 ```json
 {
-  "MONGODB_URI": "<connection-string>"
+  "URI": "<connection-string>",
+  "URI_RW": "<connection-string>"
 }
 ```
 
@@ -115,6 +120,10 @@ Examples:
 | `dbmng_hoop_ro`    | `readAnyDatabase` |
 | `dbmng_hoop_rw`    | `readWriteAnyDatabase` |
 | `dbmng_hoop_admin` | `readWriteAnyDatabase`, `userAdminAnyDatabase` |
+
+### Step Functions
+
+TODO
 
 ## Development
 
@@ -166,18 +175,20 @@ This script requires nodejs version 20+ and the following dependencies installed
 - pg: `8.13.0`
 - mysql2: `3.11.3`
 - urllib: `4.4.0`
+- client-sfn: `3.687.0`
 
 1. Create a Dockerfile and install the dependencies via `npm`
 
 ```Dockerfile
-FROM hoophq/hoopdev:1.27.4
+FROM hoophq/hoopdev:1.27.12
 
 RUN npm install --global \
     csv-parse@5.5.6 \
     node-vault@0.10.2 \
     pg@8.13.0 \
     mysql2@3.11.3 \
-    urllib@4.4.0
+    urllib@4.4.0 \
+    client-sfn@3.687.0
 ```
 
 2. Build and push your image to your registry

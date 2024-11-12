@@ -7,6 +7,7 @@ const urllib = require("urllib");
 const net = require("net");
 const pg = require("pg");
 const mysql = require("mysql2");
+const { SFNClient, StartExecutionCommand } = require("@aws-sdk/client-sfn");
 
 const user_prefix = "hoop";
 const defaultConnectTimeoutMs = 7000; // 7s
@@ -484,6 +485,35 @@ async function provisionRoles(csv, userRoleName, roleName, password) {
   }
 }
 
+async function execStepFnCommand(obj) {
+  try {
+    if (process.env.SFN_ARN == "") {
+      throw new Error(`SFN_ARN environment variable is empty`);
+    }
+
+    const sfnClient = new SFNClient();
+    const command = new StartExecutionCommand({
+      stateMachineArn: process.env.SFN_ARN,
+      input: JSON.stringify(obj),
+    });
+    const res = await sfnClient.send(command);
+    return new Promise((resolve, _) => resolve({
+      payload: {
+        statusCode: res.$metadata.httpStatusCode,
+        requestID: res.$metadata.requestId,
+        executionArn: res.executionArn,
+        startDate: res.startDate.toISOString(),
+      },
+      err: null,
+    }));
+  } catch (ex) {
+    return new Promise((resolve, _) => resolve({
+      payload: null,
+      err: ex,
+    }));
+  }
+}
+
 function generateRandomPassword() {
   characters = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
   return Array.from(crypto.webcrypto.getRandomValues(new Uint32Array(30)))
@@ -556,7 +586,7 @@ function normalizeDbIdentifier(dbIdentifier) {
 }
 
 (async () => {
-  const output = [];
+  const summary = [];
   try {
     // 1. load csv configuration from stdin by default
     // 2. or use CSV_FILE env file path
@@ -587,11 +617,20 @@ function normalizeDbIdentifier(dbIdentifier) {
     for (const [i, csv] of dbinstances.entries()) {
       const uri = parse_uri(csv.connection_string)
       const dbEntry = `${uri.scheme}/${uri.firstHost.host}`;
-      output[i] = { record: dbEntry, status: "initial" };
+      summary[i] = {
+        record: dbEntry,
+        error: '',
+        db_identifier: csv.db_identifier,
+        business_unit: csv.business_unit,
+        engine: uri.scheme == "mongodb-atlas" ? "mongo" : uri.scheme,
+        owner_email: csv.owner_email,
+        cto_email: csv.cto_email,
+        vault_keys: {}
+      };
       console.log(`--> ${dbEntry} - starting provisioning roles`);
 
       if (csv.action != "create" && csv.action != "upsert") {
-        output[i].status = "skip:unknown-action";
+        summary[i].error = `unknown action ${csv.action}`
         console.log(
           `${dbEntry} - skip record, unknown action: ${csv.action}, accept=[create, upsert]`,
         );
@@ -605,12 +644,13 @@ function normalizeDbIdentifier(dbIdentifier) {
           console.log(
             `${dbEntry} - not ready at port ${uri.firstHost.port}, reason=${err}`,
           );
-          output[i].status = "db:liveness-failed";
+          summary[i].error = `liveness check error`;
           continue;
         }
         console.log(`${dbEntry} - database ready at port ${uri.firstHost.port}`);
       }
 
+      summary[i].roles = {}
       for (roleName of roleList) {
         let userRole = `${user_prefix}_${roleName}`;
         if (uri.scheme == "mongodb-atlas") {
@@ -620,7 +660,7 @@ function normalizeDbIdentifier(dbIdentifier) {
           }
         }
         const vaultPath = `${csv.vault_path_prefix}${userRole}_${uri.firstHost.host}`;
-        output[i][roleName] = { status: 'initial', user: userRole, vault_path: vaultPath }
+        const roleResult = { error: '', user: userRole, vault_path: vaultPath }
 
         let { payload, err } = await getVaultSecret(vaultClient, vaultPath);
         console.log(
@@ -628,13 +668,13 @@ function normalizeDbIdentifier(dbIdentifier) {
         );
         // action create will not proceed if the secret already exists in Vault
         if (csv.action == "create" && err == null) {
-          output[i].status = "skip:vault-key-exists";
+          roleResult.error = 'vault key already exists (action is create)'
           continue;
         }
 
         // skip it for non 404 errors
         if (err?.statusCode > 0 && err?.statusCode != 404) {
-          output[i][roleName].status = "vault:fetch-failure";
+          roleResult.error = `fail to fetch vault key, status=${err.statusCode}`
           continue;
         }
 
@@ -644,7 +684,7 @@ function normalizeDbIdentifier(dbIdentifier) {
           `${dbEntry} - finished provisioning roles, error=${err != null}`,
         );
         if (err != null) {
-          output[i][roleName].status = "db:query-error";
+          roleResult.error = "failed provisioning role";
           console.log(
             `${dbEntry} - query error, message=${err.message}, err=${JSON.stringify(err)}`,
           );
@@ -653,25 +693,75 @@ function normalizeDbIdentifier(dbIdentifier) {
 
         const vaultPayload = parseVaultPayload(uri, roleName, userRole, randomPasswd);
         ({ payload, err } = await putVaultSecret(vaultClient, vaultPath, vaultPayload));
-        output[i][roleName].status = err == null ? "success" : "vault:write-failure";
+        roleResult.error = err != null ? "failed writing secrets into Vault" : "";
+
+        summary[i].status = (summary[i].status == "error" || roleResult.error != "") ? "error" : "ok";
+        summary[i].roles[roleName] = roleResult;
+        summary[i].vault_keys[roleName] = {
+          envs: Object.keys(vaultPayload),
+          namespace: vaultPath,
+        }
 
         console.log(
           `${dbEntry} - vault: write secret, path=${vaultPath}, request_id=${payload.requestID}, err=${JSON.stringify(err)}`,
         );
       }
+    }
 
-      output[i].status = 'finished'
+    // configure with aws env vars
+    for (const [i, s] of summary.entries()) {
+      if (s.status == "ok") {
+        console.log(`${s.record} - step function: executing with arn ${process.env.SFN_ARN}`);
+        ({ payload, err } = await execStepFnCommand({
+          pr: 'Hoop',
+          deleted: false, // TODO: add action delete
+          application_name: 'Hoop Prod',
+          db_identifier: s.db_identifier,
+          bu: s.business_unit,
+          engine: s.engine,
+          vault_keys: Object.assign(s.vault_keys, {
+            usr_dbre_namespace_ro: {},
+            usr_dbre_namespace: {},
+          }),
+          approvers: {
+            owner: s.owner_email,
+            cto: s.cto_email,
+          },
+        }))
+        summary[i].error = err == null ? "" : "failed executing step functions"
+        if (err != null) {
+          console.log(`${s.record} - step function: failed executing:`, err);
+          continue
+        }
+        console.log(`${s.record} - step function: response, status=${payload.statusCode}, request_id=${payload.requestId}, exec_arn=${payload.executionArn}, start_date=${payload.startDate}`);
+      }
     }
   } catch (e) {
-    if (output.length > 0) {
-      console.log("\n--> output");
-      console.log(JSON.stringify(output, null, 2));
+    if (summary.length > 0) {
+      logSummary(summary);
     }
 
     console.trace(e.stack || e);
     process.exit(1);
   }
-  console.log("\n--> output");
-  console.log(JSON.stringify(output, null, 2));
+  logSummary(summary);
   process.exit(0);
 })();
+
+function logSummary(summary) {
+  console.log("\nSummary ");
+  console.log("-------- ");
+  for (const s of summary) {
+    if (s.error != "") {
+      console.log(`${s.record} - error=${s.error}`)
+    }
+    for (roleName of Object.keys(s.roles)) {
+      const r = s.roles[roleName];
+      let msg = `${s.record} - user=${r.user}, success=${r.error == ""}`;
+      if (r.error != "") {
+        msg = `${s.record} - user=${r.user}, success=false, error=${r.error}`;
+      }
+      console.log(msg)
+    }
+  }
+}
