@@ -175,7 +175,7 @@ This script requires nodejs version 20+ and the following dependencies installed
 - pg: `8.13.0`
 - mysql2: `3.11.3`
 - urllib: `4.4.0`
-- client-sfn: `3.687.0`
+- @aws-sdk/client-sfn: `3.687.0`
 
 1. Create a Dockerfile and install the dependencies via `npm`
 
@@ -188,7 +188,7 @@ RUN npm install --global \
     pg@8.13.0 \
     mysql2@3.11.3 \
     urllib@4.4.0 \
-    client-sfn@3.687.0
+    @aws-sdk/client-sfn@3.687.0
 ```
 
 2. Build and push your image to your registry
