@@ -37,8 +37,8 @@ The configuration file is in csv format. The sample configuration is available a
 | ATLAS_USER            | no       | the Atlas Api key user id. Only used when it's a `mongodb-atlas` db type |
 | ATLAS_USER_KEY        | no       | the Atlas Api Secret Key. Only used when it's a `mongodb-atlas` db type |
 | PGSSLROOTCERT         | no       | the root CA cert for connecting via SSL for postgres instances |
-| AWS_ACCESS_KEY_ID     | yes      | step functions aws access key id |
-| AWS_SECRET_ACCESS_KEY | yes      | step functions aws secret access key |
+| AWS_ACCESS_KEY_ID     | no       | step functions aws access key id |
+| AWS_SECRET_ACCESS_KEY | no       | step functions aws secret access key |
 | AWS_REGION            | no       | step functions aws region |
 | SFN_ARN               | yes      | the step functions arn to execute |
 
@@ -123,7 +123,23 @@ Examples:
 
 ### Step Functions
 
-TODO
+To configure the step functions, it's necessary the `SFN_ARN` environment variable.
+By default it will use the default AWS credentials available in the instance.
+
+#### Using AWS Environment Variables
+
+Set the following variables
+
+- AWS_REGION
+- AWS_ACCESS_KEY_ID
+- AWS_SECRET_ACCESS_KEY
+
+#### Using credentials from a managed instance
+
+Export the following variables to your connection
+
+- `AWS_WEB_IDENTITY_TOKEN_FILE=system.agent.envs`
+- `AWS_ROLE_ARN=system.agent.envs`
 
 ## Development
 
