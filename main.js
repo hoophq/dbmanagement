@@ -371,12 +371,15 @@ function parseVaultPayload(uri, roleName, username, password) {
       SSL_MODE: uri.options.sslmode ? uri.options.sslmode : 'prefer',
     };
   case "mongodb-atlas":
-    let connStr = `mongodb+srv://${username}:${password}@${host}:${port}/admin?retryWrites=true&w=majority&readPreference=secondaryPreferred`
-    if (roleName == adminRole || roleName == rwRole) {
-      connStr = `mongodb+srv://${username}:${password}@${host}:${port}/admin?readPreference=primary`
-      return { URI: connStr, URI_RW: connStr }
+    if (roleName == adminRole) {
+      return {
+        URI: `mongodb+srv://${username}:${password}@${host}:${port}/admin?retryWrites=true&w=majority&readPreference=secondary`,
+        URI_RW: `mongodb+srv://${username}:${password}@${host}:${port}/admin?readPreference=primary`,
+      }
+    } else if (roleName == rwRole) {
+      return { URI: `mongodb+srv://${username}:${password}@${host}:${port}/admin?readPreference=primary` }
     }
-    return { URI: connStr }
+    return { URI: `mongodb+srv://${username}:${password}@${host}:${port}/admin?retryWrites=true&w=majority&readPreference=secondary` }
   default:
     throw new Error(`scheme ${uri.scheme} not supported`);
   }
@@ -486,6 +489,7 @@ async function provisionRoles(csv, userRoleName, roleName, password) {
 }
 
 async function execStepFnCommand(obj) {
+  console.log(JSON.stringify(obj, null, 2))
   try {
     if (process.env.SFN_ARN == "") {
       throw new Error(`SFN_ARN environment variable is empty`);
@@ -697,7 +701,19 @@ function normalizeDbIdentifier(dbIdentifier) {
 
         summary[i].status = (summary[i].status == "error" || roleResult.error != "") ? "error" : "ok";
         summary[i].roles[roleName] = roleResult;
-        summary[i].vault_keys[roleName] = {
+
+        if (uri.scheme != "mongodb-atlas") {
+          const dbreNamespaceVaultPath = `${csv.vault_path_prefix}${user_prefix}_dbre_user_${uri.firstHost.host}`;
+          const dbreNamespacePayload = parseVaultPayload(uri, "", uri.username, uri.password);
+          ({ payload, err } = await putVaultSecret(vaultClient, dbreNamespaceVaultPath, dbreNamespacePayload));
+          roleResult.error = err != null ? "failed writing secrets (dbre_namespace) into Vault" : "";
+          summary[i].dbre_namespace_payload = {
+            envs: Object.keys(dbreNamespacePayload),
+            namespace: dbreNamespaceVaultPath
+          }
+        }
+
+        summary[i].vault_keys[uri.scheme == "mongodb-atlas" && roleName == adminRole ? "admin": adminRole] = {
           envs: Object.keys(vaultPayload),
           namespace: vaultPath,
         }
@@ -719,10 +735,11 @@ function normalizeDbIdentifier(dbIdentifier) {
           db_identifier: s.db_identifier,
           bu: s.business_unit,
           engine: s.engine,
-          vault_keys: Object.assign(s.vault_keys, {
-            usr_dbre_namespace_ro: {},
-            usr_dbre_namespace: {},
-          }),
+          vault_keys: Object.assign(s.vault_keys,
+            s.engine == 'mongo' ? {} : {
+              usr_dbre_namespace_ro: {}, // TODO: NOT IMPLEMENTED YET
+              usr_dbre_namespace: s.dbre_namespace_payload,
+            }),
           approvers: {
             owner: s.owner_email,
             cto: s.cto_email,
@@ -733,7 +750,7 @@ function normalizeDbIdentifier(dbIdentifier) {
           console.log(`${s.record} - step function: failed executing:`, err);
           continue
         }
-        console.log(`${s.record} - step function: response, status=${payload.statusCode}, request_id=${payload.requestId}, exec_arn=${payload.executionArn}, start_date=${payload.startDate}`);
+        console.log(`${s.record} - step function: response, status=${payload.statusCode}, request_id=${payload.requestID}, exec_arn=${payload.executionArn}, start_date=${payload.startDate}`);
       }
     }
   } catch (e) {
