@@ -489,6 +489,7 @@ async function provisionRoles(csv, userRoleName, roleName, password) {
 }
 
 async function execStepFnCommand(obj) {
+  console.log(JSON.stringify(obj, null, 2))
   try {
     if (process.env.SFN_ARN == "") {
       throw new Error(`SFN_ARN environment variable is empty`);
@@ -712,7 +713,7 @@ function normalizeDbIdentifier(dbIdentifier) {
           }
         }
 
-        summary[i].vault_keys[uri.scheme == "mongodb-atlas" && roleName == adminRole ? "admin": adminRole] = {
+        summary[i].vault_keys[uri.scheme == "mongodb-atlas" && roleName == adminRole ? "admin": roleName] = {
           envs: Object.keys(vaultPayload),
           namespace: vaultPath,
         }
