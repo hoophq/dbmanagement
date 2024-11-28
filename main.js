@@ -717,13 +717,13 @@ function normalizeDbIdentifier(dbIdentifier) {
           roleResult.error = err != null ? "failed writing secrets (dbre_namespace) into Vault" : "";
           summary[i].dbre_namespace_payload = {
             envs: Object.keys(dbreNamespacePayload),
-            namespace: dbreNamespaceVaultPath.replace(new RegExp('/data$'), '')
+            namespace: dbreNamespaceVaultPath.replace(new RegExp('data/$'), '')
           }
         }
 
         summary[i].vault_keys[uri.scheme == "mongodb-atlas" && roleName == adminRole ? "admin": roleName] = {
           envs: Object.keys(vaultPayload),
-          namespace: vaultPath.replace(new RegExp('/data$'), ''),
+          namespace: vaultPath.replace(new RegExp('data/$'), ''),
         }
 
         console.log(
