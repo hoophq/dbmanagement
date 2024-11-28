@@ -351,9 +351,12 @@ async function newVaultClient(addr, roleID, secretID) {
 }
 
 function parseVaultPayload(uri, roleName, username, password) {
-  const { host, port } = uri.firstHost;
+  let { host, port } = uri.firstHost;
   switch (uri.scheme) {
   case "mysql":
+    if (!port) {
+      port = '3306'
+    }
     return {
       HOST: host,
       PORT: port,
@@ -362,6 +365,9 @@ function parseVaultPayload(uri, roleName, username, password) {
       DB: 'mysql',
     };
   case "postgres":
+    if (!port) {
+      port = '5432'
+    }
     return {
       HOST: host,
       PORT: port,
@@ -371,6 +377,9 @@ function parseVaultPayload(uri, roleName, username, password) {
       SSL_MODE: uri.options.sslmode ? uri.options.sslmode : 'prefer',
     };
   case "mongodb-atlas":
+    if (!port) {
+      port = '27017'
+    }
     if (roleName == adminRole) {
       return {
         URI: `mongodb+srv://${username}:${password}@${host}:${port}/admin?retryWrites=true&w=majority&readPreference=secondary`,
