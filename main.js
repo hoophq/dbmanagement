@@ -377,18 +377,15 @@ function parseVaultPayload(uri, roleName, username, password) {
       SSL_MODE: uri.options.sslmode ? uri.options.sslmode : 'prefer',
     };
   case "mongodb-atlas":
-    if (!port) {
-      port = '27017'
-    }
     if (roleName == adminRole) {
       return {
-        URI: `mongodb+srv://${username}:${password}@${host}:${port}/admin?retryWrites=true&w=majority&readPreference=secondary`,
-        URI_RW: `mongodb+srv://${username}:${password}@${host}:${port}/admin?readPreference=primary`,
+        URI: `mongodb+srv://${username}:${password}@${host}/admin?retryWrites=true&w=majority&readPreference=secondary`,
+        URI_RW: `mongodb+srv://${username}:${password}@${host}/admin?readPreference=primary`,
       }
     } else if (roleName == rwRole) {
-      return { URI: `mongodb+srv://${username}:${password}@${host}:${port}/admin?readPreference=primary` }
+      return { URI: `mongodb+srv://${username}:${password}@${host}/admin?readPreference=primary` }
     }
-    return { URI: `mongodb+srv://${username}:${password}@${host}:${port}/admin?retryWrites=true&w=majority&readPreference=secondary` }
+    return { URI: `mongodb+srv://${username}:${password}@${host}/admin?retryWrites=true&w=majority&readPreference=secondary` }
   default:
     throw new Error(`scheme ${uri.scheme} not supported`);
   }
@@ -559,7 +556,7 @@ function parse_uri(uri) {
     result.hosts = _parseAddress(tokens[4]);
     result.firstHost = {
       host: result.hosts[0]?.host,
-      port: result.hosts[0]?.port,
+      port: result.hosts[0]?.port?.toString(),
     }
     result.endpoint = tokens[5] ? decodeURIComponent(tokens[5]) : tokens[5];
     result.options = tokens[6] ? _parseOptions(tokens[6]) : tokens[6];
@@ -573,7 +570,7 @@ function _parseAddress(addresses) {
       const i = address.indexOf(":");
 
       return (i >= 0 ?
-        { host: decodeURIComponent(address.substring(0, i)), port: +address.substring(i + 1) } :
+        { host: decodeURIComponent(address.substring(0, i)), port: address.substring(i + 1) } :
         { host: decodeURIComponent(address) });
     });
 }
@@ -717,13 +714,13 @@ function normalizeDbIdentifier(dbIdentifier) {
           roleResult.error = err != null ? "failed writing secrets (dbre_namespace) into Vault" : "";
           summary[i].dbre_namespace_payload = {
             envs: Object.keys(dbreNamespacePayload),
-            namespace: dbreNamespaceVaultPath.replace(new RegExp('data/$'), '')
+            namespace: dbreNamespaceVaultPath.replace('/data/', '/')
           }
         }
 
         summary[i].vault_keys[uri.scheme == "mongodb-atlas" && roleName == adminRole ? "admin": roleName] = {
           envs: Object.keys(vaultPayload),
-          namespace: vaultPath.replace(new RegExp('data/$'), ''),
+          namespace: vaultPath.replace('/data/', '/'),
         }
 
         console.log(
