@@ -1,4 +1,4 @@
 action,vault_path_prefix,connection_string,replicas,atlas_group_id,db_identifier,business_unit,owner_email,cto_email
 upsert,dbsecrets/data/,postgres://pgroot:super-secret-pwd@127.0.0.1:5432?sslmode=disable,replica1.domain.tld;replica2.domain.tld,,localdb,bo,john.doe@domain.tld,bob@domain.tld
-upsert,dbsecrets/data/,mysql://root:super-secret-pwd@127.0.0.1:3306,,,localdb,bo,john.doe@domain.tld,bob@domain.tld
+upsert,dbsecrets/data/,mysql-aurora://root:super-secret-pwd@127.0.0.1:3306,,,localdb,bo,john.doe@domain.tld,bob@domain.tld
 upsert,dbsecrets/data/,mongodb-atlas://_:_@cluster-name.mongodb.net,,223004fb3d2e943e12170e9a,localdb,bo,john.doe@domain.tld,bob@domain.tld

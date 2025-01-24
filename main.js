@@ -136,7 +136,9 @@ function openCsvConfig(csvFile) {
     if (
       uri.scheme != "mongodb-atlas" &&
       uri.scheme != "mysql" &&
-      uri.scheme != "postgres"
+      uri.scheme != "mysql-aurora" &&
+      uri.scheme != "postgres" &&
+      uri.scheme != "postgres-aurora"
     ) {
       errors.push(
         `record=${index} wrong type for connection string (scheme=${uri.scheme}), accepted: postgres://, mysql:// or mongodb-atlas://`,
@@ -146,7 +148,7 @@ function openCsvConfig(csvFile) {
       errors.push(`record=${index} missing atlas_group_id attribute`);
     }
 
-    if (uri.scheme == "mysql" || uri.scheme == "postgres") {
+    if (uri.scheme.startsWith('mysql') || uri.scheme.startsWith('postgres')) {
       if (!uri.username || !uri.password) {
         errors.push(`record=${index} missing username or password in connection string`);
       }
@@ -354,6 +356,7 @@ function parseVaultPayload(uri, roleName, username, password) {
   let { host, port } = uri.firstHost;
   const { scheme } = uri;
   switch (scheme) {
+  case "mysql-aurora":
   case "mysql":
     if (!port) {
       port = '3306'
@@ -365,6 +368,7 @@ function parseVaultPayload(uri, roleName, username, password) {
       PORT: port,
       USER: username,
     };
+  case "postgres-aurora":
   case "postgres":
     if (!port) {
       port = '5432'
@@ -400,6 +404,7 @@ async function provisionRoles(csv, userRoleName, roleName, password) {
   let query = null;
   try {
     switch (csuri.scheme) {
+      case "postgres-aurora":
       case "postgres":
         const dbResult = await fetchPgDatabases(csuri);
         if (dbResult?.err != null) {
@@ -439,6 +444,7 @@ async function provisionRoles(csv, userRoleName, roleName, password) {
           await pgClient.end();
           return new Promise((resolve, _) => resolve(null));
         }
+      case "mysql-aurora":
       case "mysql":
         console.log(`${dbEntry} - start provisioning roles and privileges`);
         query = mysqlRoles[roleName]({ user: userRoleName, password: password });
@@ -722,13 +728,27 @@ function normalizeDbIdentifier(dbIdentifier) {
             const dbreNamespaceRoPayload = parseVaultPayload(uriReplica, "", userRole, randomPasswd);
             ({ payload, err } = await putVaultSecret(vaultClient, dbreNamespaceRoVaultPath, dbreNamespaceRoPayload));
             roleResult.error = err != null ? `failed writing replica secrets (${replicaHost}) into Vault` : "";
-            summary[i].dbre_namespace_ro_payload[String(ridx)] = {
+
+
+            let replicaEntry = String(ridx);
+            const isAurora = uri.scheme.endsWith('aurora');
+            if (isAurora) {
+              replicaEntry = 'ro'
+            }
+            // RDS replicas, could contain multiple replicas
+            summary[i].dbre_namespace_ro_payload[replicaEntry] = {
               envs: Object.keys(dbreNamespaceRoPayload),
               namespace: dbreNamespaceRoVaultPath.replace('/data/', '/')
             }
+
             console.log(
               `${dbEntry}/${replicaHost} (replica) - vault: write secret, path=${vaultPath}, request_id=${payload.requestID}, err=${JSON.stringify(err)}`,
             );
+
+            // aurora databases could have only one replica
+            if (isAurora) {
+              break
+            }
           }
         }
 
