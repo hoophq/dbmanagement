@@ -16,14 +16,13 @@ The configuration file is in csv format. The sample configuration is available a
 |-------------------|----------|-------------|
 | action            | yes      | **upsert** will replace the role. **create** check if the user role exists in Vault before creating |
 | vault_path_prefix | yes      | the prefix to use to store the provisioned roles |
-| security_group_id | no       | this configuration is not implemented |
-| hoop_agent_ip     | no       | this configuration is not implemented |
 | connection_string | yes      | the connection string of the database, accept (`mongodb-atlas://`, `postgres://` and `mysql://`). |
+| replicas          | no       | the replica hosts, could be a list of hosts separated by the delimite `;` |
 | atlas_group_id    | yes*     | the Atlas project in which the users will be provisioned |
-| db_identifier     | no       | this configuration is not implemented |
-| business_unit     | no       | this configuration is not implemented |
-| owner_email       | no       | this configuration is not implemented |
-| cto_email         | no       | this configuration is not implemented |
+| db_identifier     | no       | the database identifier |
+| business_unit     | no       | The business unit |
+| owner_email       | no       | the owner email |
+| cto_email         | no       | the cto email |
 
 ### Environment Variables
 

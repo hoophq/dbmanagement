@@ -352,17 +352,18 @@ async function newVaultClient(addr, roleID, secretID) {
 
 function parseVaultPayload(uri, roleName, username, password) {
   let { host, port } = uri.firstHost;
-  switch (uri.scheme) {
+  const { scheme } = uri;
+  switch (scheme) {
   case "mysql":
     if (!port) {
       port = '3306'
     }
     return {
       HOST: host,
+      DB: 'mysql',
+      PASSWORD: password,
       PORT: port,
       USER: username,
-      PASSWORD: password,
-      DB: 'mysql',
     };
   case "postgres":
     if (!port) {
@@ -370,13 +371,15 @@ function parseVaultPayload(uri, roleName, username, password) {
     }
     return {
       HOST: host,
+      DB: 'postgres',
+      PASSWORD: password,
       PORT: port,
       USER: username,
-      PASSWORD: password,
-      DB: 'postgres',
-      SSL_MODE: uri.options.sslmode ? uri.options.sslmode : 'prefer',
     };
   case "mongodb-atlas":
+    if (!port) {
+      port = '27017'
+    }
     if (roleName == adminRole) {
       return {
         URI: `mongodb+srv://${username}:${password}@${host}/admin?retryWrites=true&w=majority&readPreference=secondary`,
@@ -387,7 +390,7 @@ function parseVaultPayload(uri, roleName, username, password) {
     }
     return { URI: `mongodb+srv://${username}:${password}@${host}/admin?retryWrites=true&w=majority&readPreference=secondary` }
   default:
-    throw new Error(`scheme ${uri.scheme} not supported`);
+    throw new Error(`scheme ${scheme} not supported`);
   }
 }
 
@@ -704,19 +707,33 @@ function normalizeDbIdentifier(dbIdentifier) {
         ({ payload, err } = await putVaultSecret(vaultClient, vaultPath, vaultPayload));
         roleResult.error = err != null ? "failed writing secrets into Vault" : "";
 
-        summary[i].status = (summary[i].status == "error" || roleResult.error != "") ? "error" : "ok";
-        summary[i].roles[roleName] = roleResult;
-
-        if (uri.scheme != "mongodb-atlas") {
-          const dbreNamespaceVaultPath = `${csv.vault_path_prefix}${user_prefix}_dbre_user_${uri.firstHost.host}`;
-          const dbreNamespacePayload = parseVaultPayload(uri, "", uri.username, uri.password);
-          ({ payload, err } = await putVaultSecret(vaultClient, dbreNamespaceVaultPath, dbreNamespacePayload));
-          roleResult.error = err != null ? "failed writing secrets (dbre_namespace) into Vault" : "";
-          summary[i].dbre_namespace_payload = {
-            envs: Object.keys(dbreNamespacePayload),
-            namespace: dbreNamespaceVaultPath.replace('/data/', '/')
+        if (err == null && roleName == roRole) {
+          const replicas = csv.replicas ? csv.replicas.split(';') : []
+          summary[i].dbre_namespace_ro_payload = {}
+          for (const [ridx, replicaHost] of replicas.entries()) {
+            if (replicaHost == '') {
+              continue
+            }
+            const dbreNamespaceRoVaultPath = `${csv.vault_path_prefix}${user_prefix}_dbre_user_ro_${replicaHost}`;
+            const uriReplica = {
+              firstHost: { host: replicaHost, port: uri.firstHost.port},
+              scheme: uri.scheme,
+            }
+            const dbreNamespaceRoPayload = parseVaultPayload(uriReplica, "", userRole, randomPasswd);
+            ({ payload, err } = await putVaultSecret(vaultClient, dbreNamespaceRoVaultPath, dbreNamespaceRoPayload));
+            roleResult.error = err != null ? `failed writing replica secrets (${replicaHost}) into Vault` : "";
+            summary[i].dbre_namespace_ro_payload[String(ridx)] = {
+              envs: Object.keys(dbreNamespaceRoPayload),
+              namespace: dbreNamespaceRoVaultPath.replace('/data/', '/')
+            }
+            console.log(
+              `${dbEntry}/${replicaHost} (replica) - vault: write secret, path=${vaultPath}, request_id=${payload.requestID}, err=${JSON.stringify(err)}`,
+            );
           }
         }
+
+        summary[i].status = (summary[i].status == "error" || roleResult.error != "") ? "error" : "ok";
+        summary[i].roles[roleName] = roleResult;
 
         summary[i].vault_keys[uri.scheme == "mongodb-atlas" && roleName == adminRole ? "admin": roleName] = {
           envs: Object.keys(vaultPayload),
@@ -725,6 +742,25 @@ function normalizeDbIdentifier(dbIdentifier) {
 
         console.log(
           `${dbEntry} - vault: write secret, path=${vaultPath}, request_id=${payload.requestID}, err=${JSON.stringify(err)}`,
+        );
+      }
+
+      // save into Vault admin/dbre credentials
+      if (uri.scheme != "mongodb-atlas") {
+        const dbreNamespaceVaultPath = `${csv.vault_path_prefix}${user_prefix}_dbre_user_${uri.firstHost.host}`;
+        const dbreNamespacePayload = parseVaultPayload(uri, "", uri.username, uri.password);
+        ({ payload, err } = await putVaultSecret(vaultClient, dbreNamespaceVaultPath, dbreNamespacePayload));
+        summary[i].roles["dbre"] = {
+          error: err != null ? "failed writing secrets (dbre_namespace) into Vault" : "",
+          user: uri.username, vault_path: dbreNamespaceVaultPath }
+
+        summary[i].status = (summary[i].status == "error" || err != null) ? "error" : "ok";
+        summary[i].dbre_namespace_payload = {
+          envs: Object.keys(dbreNamespacePayload),
+          namespace: dbreNamespaceVaultPath.replace('/data/', '/')
+        }
+        console.log(
+          `${dbEntry}/dbre - vault: write secret, path=${dbreNamespaceVaultPath}, request_id=${payload.requestID}, err=${JSON.stringify(err)}`,
         );
       }
     }
@@ -742,7 +778,7 @@ function normalizeDbIdentifier(dbIdentifier) {
           engine: s.engine,
           vault_keys: Object.assign(s.vault_keys,
             s.engine == 'mongo' ? {} : {
-              usr_dbre_namespace_ro: {}, // TODO: NOT IMPLEMENTED YET
+              usr_dbre_namespace_ro: s.dbre_namespace_ro_payload,
               usr_dbre_namespace: s.dbre_namespace_payload,
             }),
           approvers: {
