@@ -6,6 +6,7 @@ It contain scripts to provision database roles and save them into Vault.
 
 - [x] Postgres
 - [x] MySQL
+- [x] MSSQL
 - [x] MongoDB Atlas
 
 ## Configuration
@@ -16,7 +17,7 @@ The configuration file is in csv format. The sample configuration is available a
 |-------------------|----------|-------------|
 | action            | yes      | **upsert** will replace the role. **create** check if the user role exists in Vault before creating |
 | vault_path_prefix | yes      | the prefix to use to store the provisioned roles |
-| connection_string | yes      | the connection string of the database, accept (`mongodb-atlas://`, `postgres://`, `mysql://`, `postgres-aurora://` and `mysql-aurora://`). |
+| connection_string | yes      | the connection string of the database, accept (`mongodb-atlas://`, `postgres://`, `mysql://`, `postgres-aurora://`, `mysql-aurora://` and `sqlserver://`). |
 | replicas          | no       | the replica hosts, could be a list of hosts separated by the delimite `;` |
 | atlas_group_id    | yes*     | the Atlas project in which the users will be provisioned |
 | db_identifier     | no       | the database identifier |
@@ -61,7 +62,7 @@ Roles will be provisioned using the `vault_path_prefix` csv configuration in the
 
 The path of a provisioned user will be available in the following format in a Key Value version 2:
 
-**Postgres / MySQL**
+**Postgres / MySQL / MSSQL**
 
 - `{mount_path}/data/hoop_{role}_{db_hostname}`
 
@@ -102,25 +103,33 @@ Examples:
 
 | role                   | privileges |
 |------------------------|------------|
-| `dbmng_hoop_ro`        | `SELECT`, `USAGE` on schema `public` and `LOGIN` |
-| `dbmng_hoop_rw`        | `SELECT`, `INSERT`, `UPDATE`, `DELETE` |
-| `dbmng_hoop_admin`     | `SELECT`, `INSERT`, `UPDATE`, `DELETE`, `TRUNCATE`, `REFERENCES` |
+| `hoop_ro`        | `SELECT`, `USAGE` on schema `public` and `LOGIN` |
+| `hoop_rw`        | `SELECT`, `INSERT`, `UPDATE`, `DELETE` |
+| `hoop_admin`     | `SELECT`, `INSERT`, `UPDATE`, `DELETE`, `TRUNCATE`, `REFERENCES` |
 
 - **MySQL**
 
 | role                   | privileges |
 |------------------------|------------|
-| `dbmng_hoop_ro`        | `SELECT` |
-| `dbmng_hoop_rw`        | `SELECT`, `INSERT`, `UPDATE`, `DELETE` |
-| `dbmng_hoop_admin`     | `SELECT`, `INSERT`, `UPDATE`, `DELETE`, `TRUNCATE`, `REFERENCES`, `TRIGGER` |
+| `hoop_ro`        | `SELECT` |
+| `hoop_rw`        | `SELECT`, `INSERT`, `UPDATE`, `DELETE` |
+| `hoop_admin`     | `SELECT`, `INSERT`, `UPDATE`, `DELETE`, `TRUNCATE`, `REFERENCES`, `TRIGGER` |
+
+- **MSSQL**
+
+| role                   | privileges |
+|------------------------|------------|
+| `hoop_ro`    | `db_datareader` |
+| `hoop_rw`    | `db_datareader`, `db_datawriter` |
+| `hoop_admin` | `db_datareader`, `db_datawriter`, `db_ddladmin` |
 
 - **MongoDB**
 
 | role                   | privileges |
 |------------------------|------------|
-| `dbmng_hoop_ro`    | `readAnyDatabase` |
-| `dbmng_hoop_rw`    | `readWriteAnyDatabase` |
-| `dbmng_hoop_admin` | `readWriteAnyDatabase`, `userAdminAnyDatabase` |
+| `hoop_ro`    | `readAnyDatabase` |
+| `hoop_rw`    | `readWriteAnyDatabase` |
+| `hoop_admin` | `readWriteAnyDatabase`, `userAdminAnyDatabase` |
 
 ### Step Functions
 
@@ -191,6 +200,7 @@ This script requires nodejs version 20+ and the following dependencies installed
 - node-vault: `0.10.2`
 - pg: `8.13.0`
 - mysql2: `3.11.3`
+- mssql: `11.0.1`
 - urllib: `4.4.0`
 - @aws-sdk/client-sfn: `3.687.0`
 
@@ -204,6 +214,7 @@ RUN npm install --global \
     node-vault@0.10.2 \
     pg@8.13.0 \
     mysql2@3.11.3 \
+    mssql@11.0.1 \
     urllib@4.4.0 \
     @aws-sdk/client-sfn@3.687.0
 ```

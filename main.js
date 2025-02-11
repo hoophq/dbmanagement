@@ -7,6 +7,8 @@ const urllib = require("urllib");
 const net = require("net");
 const pg = require("pg");
 const mysql = require("mysql2");
+const mssql = require('mssql')
+
 const { SFNClient, StartExecutionCommand } = require("@aws-sdk/client-sfn");
 
 const user_prefix = "hoop";
@@ -15,13 +17,21 @@ const roRole = "ro";
 const rwRole = "rw";
 const adminRole = "ddl";
 const roleList = [roRole, rwRole, adminRole];
+const availableDatabases = [
+  'mongodb-atlas',
+  'mysql',
+  'mysql-aurora',
+  'postgres',
+  'postgres-aurora',
+  'sqlserver',
+]
 
 const baseAtlasAPIUrl = "https://cloud.mongodb.com/api/atlas/v2";
 const { ATLAS_USER, ATLAS_USER_KEY } = process.env;
 
 const postgresRoles = {
   [roRole]: (o) => {
-    o.privileges = "SELECT";
+    const privileges = o.privileges ? o.privileges : "SELECT"
     return `
 DO $$
   DECLARE
@@ -43,7 +53,7 @@ BEGIN
     WHERE schema_name NOT IN ('information_schema', 'pg_catalog', 'pg_toast')
   LOOP
     EXECUTE 'GRANT USAGE ON SCHEMA ' || db_schema_name || ' TO "${o.user}"';
-    EXECUTE 'GRANT ${o.privileges} ON ALL TABLES IN SCHEMA ' || db_schema_name || ' TO "${o.user}"';
+    EXECUTE 'GRANT ${privileges} ON ALL TABLES IN SCHEMA ' || db_schema_name || ' TO "${o.user}"';
   END LOOP;
 END$$;`;
   },
@@ -81,6 +91,75 @@ GRANT SELECT, DELETE, UPDATE, INSERT, ALTER, CREATE, DROP ON *.* TO '${o.user}'@
 FLUSH PRIVILEGES;
 COMMIT;`,
 };
+
+const mssqlRoles = {
+  [roRole]: (o) => {
+    // https://learn.microsoft.com/en-us/sql/relational-databases/security/authentication-access/database-level-roles?view=sql-server-ver16#fixed-database-roles
+    const roleName = o.roleName ? o.roleName : 'db_datareader'
+    let roleStmt = '';
+    switch (roleName) {
+    case "db_datareader":
+      roleStmt = `
+  ALTER ROLE db_datareader ADD MEMBER ${o.user};`
+      break;
+    case "db_datawriter":
+      roleStmt = `
+  ALTER ROLE db_datareader ADD MEMBER ${o.user};
+  ALTER ROLE db_datawriter ADD MEMBER ${o.user};`
+    default:
+      roleStmt = `
+  ALTER ROLE db_datareader ADD MEMBER ${o.user};
+  ALTER ROLE db_datawriter ADD MEMBER ${o.user};
+  ALTER ROLE db_ddladmin ADD MEMBER ${o.user};`
+    }
+    return `
+BEGIN TRANSACTION;
+
+-- Create or alter LOGIN with password
+IF NOT EXISTS (SELECT * FROM sys.server_principals WHERE name = '${o.user}')
+BEGIN
+	CREATE LOGIN ${o.user} WITH PASSWORD = '${o.password}';
+END
+ELSE
+	ALTER LOGIN ${o.user} WITH PASSWORD = '${o.password}';
+
+-- Obtain existent databases in the instace
+DECLARE @DBName NVARCHAR(100)
+DECLARE db_cursor CURSOR FOR
+SELECT name FROM sys.databases WHERE name NOT IN ('master', 'model', 'msdb', 'tempdb')
+
+OPEN db_cursor
+FETCH NEXT FROM db_cursor INTO @DBName
+
+-- Iterate over all databases creating the user and associating to roles
+WHILE @@FETCH_STATUS = 0
+BEGIN
+	DECLARE @SQL NVARCHAR(MAX)
+  SET @SQL = N'
+  USE ' + QUOTENAME(@DBName) + '
+  IF NOT EXISTS (SELECT * FROM sys.database_principals WHERE name = ''${o.user}'')
+  BEGIN
+    CREATE USER ${o.user} FOR LOGIN ${o.user};
+  END
+  -- role statements
+  ${roleStmt}';
+  EXEC sp_executesql @SQL;
+  FETCH NEXT FROM db_cursor INTO @DBName
+END
+
+CLOSE db_cursor
+DEALLOCATE db_cursor
+COMMIT;`
+  },
+  [rwRole]: (o) => {
+    o.roleName = 'db_datawriter'
+    return mssqlRoles[roRole](o)
+  },
+  [adminRole]: (o) => {
+    o.roleName = 'db_ddladmin'
+    return mssqlRoles[roRole](o)
+  }
+}
 
 const mongodbAtlasRoles = {
   [roRole]: (o) => {
@@ -133,13 +212,7 @@ function openCsvConfig(csvFile) {
       errors.push(`record=${index} missing db_identifier attribute`,);
     }
     const uri = parse_uri(csv.connection_string)
-    if (
-      uri.scheme != "mongodb-atlas" &&
-      uri.scheme != "mysql" &&
-      uri.scheme != "mysql-aurora" &&
-      uri.scheme != "postgres" &&
-      uri.scheme != "postgres-aurora"
-    ) {
+    if (!availableDatabases.includes(uri.scheme)) {
       errors.push(
         `record=${index} wrong type for connection string (scheme=${uri.scheme}), accepted: postgres://, mysql:// or mongodb-atlas://`,
       );
@@ -380,6 +453,17 @@ function parseVaultPayload(uri, roleName, username, password) {
       PORT: port,
       USER: username,
     };
+  case "sqlserver":
+    if (!port) {
+      port = '1433'
+    }
+    return {
+      HOST: host,
+      DB: 'master',
+      PASSWORD: password,
+      PORT: port,
+      USER: username,
+    };
   case "mongodb-atlas":
     if (!port) {
       port = '27017'
@@ -464,6 +548,31 @@ async function provisionRoles(csv, userRoleName, roleName, password) {
           throw ex;
         });
         conn.end();
+        return new Promise((resolve, _) => resolve(null));
+      case "sqlserver":
+        console.log(`${dbEntry} - start provisioning roles and privileges`);
+        query = mssqlRoles[roleName]({ user: userRoleName, password: password });
+        const sqlConfig = {
+          server: csuri.firstHost.host,
+          port: parseInt(csuri.firstHost.port, 10),
+          user: csuri.username,
+          password: csuri.password,
+          database: "master",
+          pool: {
+            max: 10,
+            min: 0,
+            idleTimeoutMillis: 30000
+          },
+          options: {
+            encrypt: csuri.options.encrypt == 'true',
+            trustServerCertificate: csuri.options.trustServerCertificate == 'true'
+          }
+        }
+        const pool = await mssql.connect(sqlConfig)
+        _ = await pool.request().query(query)
+        await pool.close()
+
+        // 1. use mssql driver and execute it
         return new Promise((resolve, _) => resolve(null));
       case "mongodb-atlas":
         console.log(
@@ -569,6 +678,7 @@ function parse_uri(uri) {
     }
     result.endpoint = tokens[5] ? decodeURIComponent(tokens[5]) : tokens[5];
     result.options = tokens[6] ? _parseOptions(tokens[6]) : tokens[6];
+    result.options = result.options ? result.options : {}
   }
   return result;
 }
@@ -687,12 +797,16 @@ function normalizeDbIdentifier(dbIdentifier) {
         // action create will not proceed if the secret already exists in Vault
         if (csv.action == "create" && err == null) {
           roleResult.error = 'vault key already exists (action is create)'
+          summary[i].status = "error";
+          summary[i].roles[roleName] = roleResult;
           continue;
         }
 
         // skip it for non 404 errors
         if (err?.statusCode > 0 && err?.statusCode != 404) {
           roleResult.error = `fail to fetch vault key, status=${err.statusCode}`
+          summary[i].status = "error";
+          summary[i].roles[roleName] = roleResult;
           continue;
         }
 
@@ -706,6 +820,8 @@ function normalizeDbIdentifier(dbIdentifier) {
           console.log(
             `${dbEntry} - query error, message=${err.message}, err=${JSON.stringify(err)}`,
           );
+          summary[i].status = "error";
+          summary[i].roles[roleName] = roleResult;
           continue;
         }
 
@@ -713,6 +829,7 @@ function normalizeDbIdentifier(dbIdentifier) {
         ({ payload, err } = await putVaultSecret(vaultClient, vaultPath, vaultPayload));
         roleResult.error = err != null ? "failed writing secrets into Vault" : "";
 
+        // replica setup
         if (err == null && roleName == roRole) {
           const replicas = csv.replicas ? csv.replicas.split(';') : []
           summary[i].dbre_namespace_ro_payload = {}
@@ -833,7 +950,7 @@ function logSummary(summary) {
     if (s.error != "") {
       console.log(`${s.record} - error=${s.error}`)
     }
-    for (roleName of Object.keys(s.roles)) {
+    for (roleName of Object.keys(s.roles ? s.roles : [])) {
       const r = s.roles[roleName];
       let msg = `${s.record} - user=${r.user}, success=${r.error == ""}`;
       if (r.error != "") {
